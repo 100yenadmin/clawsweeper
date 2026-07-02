@@ -296,6 +296,8 @@
               "impact:message-loss",
               "impact:session-state",
               "impact:auth-provider",
+              "impact:ux-release-blocker",
+              "impact:ux-friction",
               "impact:other",
               "maturity:stable",
               "merge-risk: 🚨 compatibility",
