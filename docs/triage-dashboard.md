@@ -74,6 +74,7 @@ Impact groups are a read-only projection of existing `impact:*` labels:
 | State and data   | `impact:session-state`, `impact:data-loss` |
 | Reliability      | `impact:crash-loop`                       |
 | Security         | `impact:security`                         |
+| User experience  | `impact:ux-release-blocker`, `impact:ux-friction` |
 | Other impact     | `impact:other`                            |
 | Unclassified     | no recognized impact label                |
 
