@@ -271,6 +271,32 @@ test("decision parser enforces required schema-shaped evidence", () => {
   assert.deepEqual(
     parseDecision(
       closeDecision({
+        triagePriority: "P0",
+        impactLabels: ["impact:ux-release-blocker", "impact:ux-friction"],
+        labelJustifications: [
+          {
+            label: "P0",
+            reason:
+              "Setup is blocked for non-technical first-time users without a product recovery path.",
+          },
+          {
+            label: "impact:ux-release-blocker",
+            reason:
+              "Recovery requires terminal commands or support instead of an in-product Doctor button.",
+          },
+          {
+            label: "impact:ux-friction",
+            reason:
+              "The same setup path also adds avoidable support burden for recoverable variants.",
+          },
+        ],
+      }),
+    ).impactLabels,
+    ["impact:ux-release-blocker", "impact:ux-friction"],
+  );
+  assert.deepEqual(
+    parseDecision(
+      closeDecision({
         mergeRiskLabels: ["merge-risk: 🚨 other"],
         mergeRiskOptions: [
           {
