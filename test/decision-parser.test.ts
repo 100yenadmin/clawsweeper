@@ -268,32 +268,24 @@ test("decision parser enforces required schema-shaped evidence", () => {
     ).impactLabels,
     ["impact:other"],
   );
-  assert.deepEqual(
-    parseDecision(
-      closeDecision({
-        triagePriority: "P0",
-        impactLabels: ["impact:ux-release-blocker", "impact:ux-friction"],
-        labelJustifications: [
-          {
-            label: "P0",
-            reason:
-              "Setup is blocked for non-technical first-time users without a product recovery path.",
-          },
-          {
-            label: "impact:ux-release-blocker",
-            reason:
-              "Recovery requires terminal commands or support instead of an in-product Doctor button.",
-          },
-          {
-            label: "impact:ux-friction",
-            reason:
-              "The same setup path also adds avoidable support burden for recoverable variants.",
-          },
-        ],
-      }),
-    ).impactLabels,
-    ["impact:ux-release-blocker", "impact:ux-friction"],
-  );
+  for (const [triagePriority, impactLabel, reason] of [
+    ["P0", "impact:ux-release-blocker", "Setup is blocked without an in-product recovery path."],
+    ["P1", "impact:ux-friction", "Setup is recoverable but creates avoidable support burden."],
+  ] as const) {
+    assert.deepEqual(
+      parseDecision(
+        closeDecision({
+          triagePriority,
+          impactLabels: [impactLabel],
+          labelJustifications: [
+            { label: triagePriority, reason: "The issue has user-facing setup impact." },
+            { label: impactLabel, reason },
+          ],
+        }),
+      ).impactLabels,
+      [impactLabel],
+    );
+  }
   assert.deepEqual(
     parseDecision(
       closeDecision({

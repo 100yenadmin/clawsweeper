@@ -141,15 +141,19 @@ Use `none` only when ClawSweeper should intentionally leave priority labels abse
 
 Apply this UX override before falling back to ordinary technical severity:
 
-| User-experience evidence | Required classification |
-| --- | --- |
-| Website, download, install, update, setup, onboarding, auth/provider setup, first useful run, or in-product recovery is blocked for a non-technical first-time user; or recovery requires terminal, config edits, logs, manual file edits, or support. | Set `triagePriority: "P0"` and include `impact:ux-release-blocker`. |
-| The user can proceed only through docs, support, guessing, or fragile workaround steps, but progress is not fully blocked. | Use `P1` or `P2` and include `impact:ux-friction`. |
-| Cosmetic confusion or a fully recoverable in-product issue that does not block progress. | Use normal `P2` or `P3`; do not add `impact:ux-release-blocker`. |
+| User-experience evidence                                                                                                                                                                                          | Required classification                                             |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| A non-technical first-time or community user is blocked in website, download, install, update, setup, onboarding, auth/provider setup, first useful run, or in-product recovery, with no in-product path forward. | Set `triagePriority: "P0"` and include `impact:ux-release-blocker`. |
+| Completing or recovering that blocked path requires terminal commands, config edits, log inspection, manual file edits, internal knowledge, or maintainer/support intervention.                                   | Set `triagePriority: "P0"` and include `impact:ux-release-blocker`. |
+| The user can proceed only through docs, support, guessing, or fragile workaround steps, but progress is not fully blocked.                                                                                        | Use `P1` or `P2` and include `impact:ux-friction`.                  |
+| Cosmetic confusion or a fully recoverable in-product issue that does not block progress.                                                                                                                          | Use normal `P2` or `P3`; do not add `impact:ux-release-blocker`.    |
 
-When recovery currently requires a technical path, make `bestSolution` or
-`workReason` recommend a less-technical product surface such as a Doctor button,
-Fix button, setup wizard, inline recovery, or visible command launcher.
+Do not promote ordinary advanced configuration or optional power-user workflows
+solely because they use a terminal or config file. The override requires a
+blocked user-facing path. When recovery from that blocker currently requires a
+technical path, make `bestSolution` or `workReason` recommend a less-technical
+product surface such as a Doctor button, Fix button, setup wizard, inline
+recovery, or visible command launcher.
 
 Do not raise `triagePriority` solely because CI or status checks are failing,
 pending, missing, flaky, or require routine maintainer follow-up. Treat check
@@ -167,7 +171,7 @@ the issue, and keep this separate from `triagePriority` and
 `impact:message-loss`: This issue is about lost, duplicated, misrouted, or suppressed channel messages.
 `impact:session-state`: This issue is about session, memory, transcript, context, or agent state drift.
 `impact:auth-provider`: This issue is about auth, provider routing, model choice, or SecretRef resolution.
-`impact:ux-release-blocker`: Non-technical users cannot progress without terminal, logs, config, or support.
+`impact:ux-release-blocker`: A non-technical user is blocked without terminal, logs, config, or support.
 `impact:ux-friction`: User-facing flow adds avoidable confusion or support burden without fully blocking progress.
 `impact:other`: This issue has meaningful maintainer-visible impact outside the owned taxonomy.
 Use `impact:other` only when the issue has a concrete maintainer-visible impact

@@ -1334,7 +1334,7 @@ const IMPACT_LABELS = [
   {
     name: "impact:ux-release-blocker",
     color: "B60205",
-    description: "Non-technical users cannot progress without terminal, logs, config, or support.",
+    description: "A non-technical user is blocked without terminal, logs, config, or support.",
   },
   {
     name: "impact:ux-friction",

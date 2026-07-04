@@ -471,8 +471,7 @@ test("ClawSweeper impact label scheme exposes owned impact labels", () => {
     {
       name: "impact:ux-release-blocker",
       color: "B60205",
-      description:
-        "Non-technical users cannot progress without terminal, logs, config, or support.",
+      description: "A non-technical user is blocked without terminal, logs, config, or support.",
     },
     {
       name: "impact:ux-friction",
@@ -556,12 +555,13 @@ test("review prompt and schema define UX release-blocker override", () => {
   const prompt = reviewPromptTemplate();
 
   assert.match(prompt, /Apply this UX override before falling back to ordinary technical severity/);
-  assert.match(prompt, /non-technical first-time user/);
-  assert.match(prompt, /terminal, config edits, logs, manual file edits, or support/);
+  assert.match(prompt, /non-technical first-time or community user/);
+  assert.match(prompt, /terminal commands, config edits, log inspection, manual file edits/);
+  assert.match(prompt, /override requires a\s+blocked user-facing path/);
   assert.match(prompt, /Set `triagePriority: "P0"` and include `impact:ux-release-blocker`/);
-  assert.match(prompt, /Doctor button,\s+Fix button,\s+setup wizard,\s+inline recovery/);
+  assert.match(prompt, /Doctor button,\s+Fix button,\s+setup wizard,\s+inline\s+recovery/);
   assert.match(schemaDescription, /UX override:/);
-  assert.match(schemaDescription, /non-technical first-time user/);
+  assert.match(schemaDescription, /non-technical first-time or community user/);
   assert.match(schemaDescription, /Doctor button, Fix button, setup wizard, inline recovery/);
   assert.ok(impactLabelEnum.includes("impact:ux-release-blocker"));
   assert.ok(impactLabelEnum.includes("impact:ux-friction"));
