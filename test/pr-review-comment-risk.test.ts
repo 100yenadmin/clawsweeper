@@ -915,6 +915,66 @@ Needs maintainer review.
   assert.match(markers, /sha=abc123def456/);
 });
 
+test("deep-regression blockers force human markers instead of automerge pass", () => {
+  for (const status of ["blocked", "needs_attention"]) {
+    const report = `${reportFrontMatter({
+      type: "pull_request",
+      number: "74145",
+      pull_head_sha: "abc123def456",
+      decision: "keep_open",
+      confidence: "high",
+      review_status: "complete",
+      labels: JSON.stringify(["clawsweeper:automerge"]),
+      work_candidate: "none",
+    })}
+
+## Summary
+
+Would otherwise pass automerge.
+
+## Deep Regression Review
+
+Status: ${status}
+
+Risk level: critical
+
+Surface categories: auth, session_state
+
+Summary: Auth session behavior needs maintainer redesign review.
+
+Graph context used: false
+
+Graph context freshness: missing
+
+Required maintainer action: Do not merge until the session migration path is proven.
+
+Concerns:
+
+- **[P1] Session state can be dropped:** \`src/runtime/auth/session-store.ts:42\`
+  - body: The patch replaces refresh handling without preserving persisted session keys.
+  - confidence: 0.9
+
+## Review Findings
+
+Overall correctness: patch is correct
+
+Overall confidence: 0.9
+
+Full review comments:
+
+- none
+`;
+
+    const comment = renderReviewCommentFromReport(report, "none");
+    const markers = reviewAutomationMarkersFromReport(report);
+
+    assert.match(comment, /Codex review: found deep regression risk before merge\./);
+    assert.match(markers, /clawsweeper-verdict:needs-human/);
+    assert.doesNotMatch(markers, /clawsweeper-verdict:pass/);
+    assert.doesNotMatch(markers, /clawsweeper-action:fix-required/);
+  }
+});
+
 test("non-PR review reports do not carry repair markers", () => {
   assert.equal(reviewAutomationMarkersFromReport(reportFrontMatter({ type: "issue" })), "");
 });

@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import {
+  buildGitNexusContextPacket,
+  type GitNexusCommandResult,
+} from "../dist/gitnexus-context.js";
 import { reviewContentCacheHit } from "../dist/scheduler-policy.js";
 import {
+  gitnexusReviewCacheStateForTest,
   itemContentDigestForTest,
   reviewCommentContentRevisionForTest,
   reviewReportCanPromoteToCloseForTest,
@@ -10,6 +15,13 @@ import {
 import { item } from "./helpers.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+function runnerFor(outputs: Record<string, GitNexusCommandResult>) {
+  return (command: string, args: readonly string[]): GitNexusCommandResult => {
+    const key = [command, ...args].join(" ");
+    return outputs[key] ?? { status: 1, stdout: "", stderr: `unexpected command: ${key}` };
+  };
+}
 
 function pullContext(overrides = {}) {
   return {
@@ -260,6 +272,119 @@ test("content digest uses the full review-comment revision", () => {
     pullContext({ pullReviewCommentsRevision: "review-comments-2" }),
   );
   assert.notEqual(a, b);
+});
+
+test("content digest busts when GitNexus review context becomes enabled or changes", () => {
+  const pull = item({ kind: "pull_request", number: 200 });
+  const context = pullContext();
+  const withoutGraph = itemContentDigestForTest(pull, context, undefined, {
+    gitnexusContext: { enabled: false },
+  });
+  const enabledMissing = itemContentDigestForTest(pull, context, undefined, {
+    gitnexusContext: {
+      enabled: true,
+      freshness: "missing",
+      contentSha256: null,
+      expectedContextWindowTokens: null,
+    },
+  });
+  const freshGraph = itemContentDigestForTest(pull, context, undefined, {
+    gitnexusContext: {
+      enabled: true,
+      freshness: "fresh",
+      contentSha256: "a".repeat(64),
+      expectedContextWindowTokens: 1_000_000,
+    },
+  });
+  const changedGraph = itemContentDigestForTest(pull, context, undefined, {
+    gitnexusContext: {
+      enabled: true,
+      freshness: "fresh",
+      contentSha256: "b".repeat(64),
+      expectedContextWindowTokens: 1_000_000,
+    },
+  });
+
+  assert.notEqual(withoutGraph, enabledMissing);
+  assert.notEqual(enabledMissing, freshGraph);
+  assert.notEqual(freshGraph, changedGraph);
+});
+
+test("content digest reuses identical GitNexus graph context across packet timestamps", () => {
+  const pull = item({ kind: "pull_request", number: 200 });
+  const context = pullContext();
+  const packetFor = (generatedAt: string, output: string) =>
+    buildGitNexusContextPacket({
+      enabled: true,
+      repo: "openclaw/openclaw",
+      repoPath: "/repo/openclaw",
+      pullRequestNumber: 200,
+      baseSha: "base-sha-1",
+      headSha: "head-sha-1",
+      changedFiles: [{ path: "src/runtime/auth/session-store.ts" }],
+      repoAliases: { "openclaw/openclaw": "openclaw" },
+      now: () => generatedAt,
+      runner: runnerFor({
+        "git rev-parse HEAD": { status: 0, stdout: "head-sha-1\n", stderr: "" },
+        "gitnexus list": {
+          status: 0,
+          stdout: [
+            "  openclaw",
+            "    Path:    /repo/openclaw",
+            "    Indexed: 7/9/2026, 1:00:00 AM",
+            "    Commit:  head-sha-1",
+          ].join("\n"),
+          stderr: "",
+        },
+        "gitnexus query src/runtime/auth/session-store.ts --repo openclaw --limit 3 --max-tokens 800":
+          {
+            status: 0,
+            stdout: output,
+            stderr: "",
+          },
+      }),
+    });
+  const first = packetFor("2026-07-09T00:00:00.000Z", "Session store depends on auth refresh.");
+  const second = packetFor("2026-07-09T00:05:00.000Z", "Session store depends on auth refresh.");
+  const changed = packetFor(
+    "2026-07-09T00:05:00.000Z",
+    "Provider routing also reads session state.",
+  );
+  const digestFor = (contentSha256: string) =>
+    itemContentDigestForTest(pull, context, undefined, {
+      gitnexusContext: {
+        enabled: true,
+        freshness: "fresh",
+        contentSha256,
+        expectedContextWindowTokens: 1_000_000,
+      },
+    });
+
+  assert.notEqual(first.sha256, second.sha256);
+  assert.equal(digestFor(first.contentSha256), digestFor(second.contentSha256));
+  assert.notEqual(digestFor(second.contentSha256), digestFor(changed.contentSha256));
+});
+
+test("GitNexus cache state is graph-disabled outside OpenClaw target reviews", () => {
+  const previous = process.env.CLAWSWEEPER_GITNEXUS_CONTEXT;
+  process.env.CLAWSWEEPER_GITNEXUS_CONTEXT = "1";
+  try {
+    const nonTarget = gitnexusReviewCacheStateForTest(null, "openclaw/clawsweeper");
+    const target = gitnexusReviewCacheStateForTest(null, "openclaw/openclaw");
+
+    assert.equal(nonTarget.enabled, false);
+    assert.equal(nonTarget.freshness, null);
+    assert.equal(nonTarget.contentSha256, null);
+    assert.equal(nonTarget.alias, null);
+    assert.equal(target.enabled, true);
+    assert.equal(target.freshness, "missing");
+  } finally {
+    if (previous === undefined) {
+      delete process.env.CLAWSWEEPER_GITNEXUS_CONTEXT;
+    } else {
+      process.env.CLAWSWEEPER_GITNEXUS_CONTEXT = previous;
+    }
+  }
 });
 
 const NOW = Date.parse("2026-07-01T00:00:00Z");

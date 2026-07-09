@@ -87,6 +87,20 @@ import {
   type PrSurfaceFile,
 } from "./pr-surface-stats.js";
 import {
+  buildGitNexusContextPacket,
+  renderGitNexusContextPacketForPrompt,
+  type GitNexusContextPacket,
+  type GitNexusFreshness,
+} from "./gitnexus-context.js";
+import {
+  classifyOpenClawDeepRegressionRisk,
+  renderOpenClawDeepRegressionRiskForPrompt,
+  type OpenClawDeepRegressionRiskFile,
+  type OpenClawDeepRegressionRiskLevel,
+  type OpenClawDeepRegressionRiskPacket,
+  type OpenClawDeepRegressionSurfaceCategory,
+} from "./openclaw-review-risk.js";
+import {
   compactPrCloseCoverageProofComment,
   compactPrCloseCoverageProofText,
   formatPrCloseCoverageProofDetailList,
@@ -222,6 +236,8 @@ type AgentsPolicyStatusKind =
   | "unreadable_or_unclear";
 type SecurityReviewStatus = "cleared" | "needs_attention" | "not_applicable";
 type SecurityConcernSeverity = "high" | "medium" | "low";
+type DeepRegressionReviewStatus = "not_applicable" | "cleared" | "needs_attention" | "blocked";
+type DeepRegressionConcernSeverity = "P0" | "P1" | "P2" | "P3";
 type RealBehaviorProofStatus =
   | "sufficient"
   | "missing"
@@ -381,6 +397,19 @@ interface GitInfo {
   latestRelease: LatestRelease | null;
 }
 
+interface GitNexusReviewCacheState {
+  enabled: boolean;
+  freshness?: GitNexusFreshness | null | undefined;
+  contentSha256?: string | null | undefined;
+  alias?: string | null | undefined;
+  includeStaleContext?: boolean | undefined;
+  expectedContextWindowTokens?: number | null | undefined;
+}
+
+interface ReviewContentDigestOptions {
+  gitnexusContext?: GitNexusReviewCacheState | undefined;
+}
+
 interface Evidence {
   label: string;
   detail: string;
@@ -423,6 +452,26 @@ interface SecurityReview {
   status: SecurityReviewStatus;
   summary: string;
   concerns: SecurityConcern[];
+}
+
+interface DeepRegressionConcern {
+  title: string;
+  body: string;
+  severity: DeepRegressionConcernSeverity;
+  confidenceScore: number;
+  file: string | null;
+  line: number | null;
+}
+
+interface DeepRegressionReview {
+  status: DeepRegressionReviewStatus;
+  riskLevel: OpenClawDeepRegressionRiskLevel;
+  surfaceCategories: OpenClawDeepRegressionSurfaceCategory[];
+  summary: string;
+  graphContextUsed: boolean;
+  graphContextFreshness: GitNexusFreshness;
+  concerns: DeepRegressionConcern[];
+  requiredMaintainerAction: string;
 }
 
 interface RealBehaviorProof {
@@ -549,6 +598,7 @@ interface Decision {
   agentsPolicyStatus: AgentsPolicyStatus;
   reviewFindings: ReviewFinding[];
   securityReview: SecurityReview;
+  deepRegressionReview: DeepRegressionReview;
   realBehaviorProof: RealBehaviorProof;
   prRating: PrRating;
   telegramVisibleProof: TelegramVisibleProof;
@@ -598,6 +648,7 @@ interface ItemContext {
   pullCommits?: unknown[];
   pullReviewComments?: unknown[];
   pullReviewCommentsRevision?: string;
+  deepRegressionRisk?: OpenClawDeepRegressionRiskPacket;
   counts?: {
     comments: number;
     commentsHydrated?: number;
@@ -656,6 +707,13 @@ interface ReviewRuntime {
   additionalPromptChars?: number;
   contextElapsedMs?: number;
   codexElapsedMs?: number;
+  gitnexusContextFreshness?: GitNexusFreshness;
+  gitnexusContextSha256?: string;
+  gitnexusContextContentSha256?: string;
+  gitnexusContextBytes?: number;
+  expectedContextWindowTokens?: number | null;
+  estimatedPromptTokens?: number;
+  contextBudgetStatus?: "unknown_window" | "within_budget" | "overflow";
 }
 
 interface ReviewPromptTelemetry {
@@ -700,6 +758,7 @@ interface ReviewPromptRuntimeHints {
   proofScratchDir?: string;
   mediaProofManifestPath?: string;
   mediaProofSummary?: string;
+  gitnexusContextMarkdown?: string;
 }
 
 interface DashboardItem {
@@ -1673,6 +1732,44 @@ const SECURITY_REVIEW_STATUSES = new Set<SecurityReviewStatus>([
   "not_applicable",
 ]);
 const SECURITY_CONCERN_SEVERITIES = new Set<SecurityConcernSeverity>(["high", "medium", "low"]);
+const DEEP_REGRESSION_REVIEW_STATUSES = new Set<DeepRegressionReviewStatus>([
+  "not_applicable",
+  "cleared",
+  "needs_attention",
+  "blocked",
+]);
+const DEEP_REGRESSION_RISK_LEVELS = new Set<OpenClawDeepRegressionRiskLevel>([
+  "standard",
+  "high",
+  "critical",
+]);
+const DEEP_REGRESSION_SURFACE_CATEGORIES = new Set<OpenClawDeepRegressionSurfaceCategory>([
+  "core",
+  "auth",
+  "session_state",
+  "runtime",
+  "security_boundary",
+  "provider_routing",
+  "migration",
+  "release_automation",
+  "config_defaults",
+  "generated_or_build_artifact",
+  "tests_only",
+  "docs_only",
+]);
+const DEEP_REGRESSION_GRAPH_CONTEXT_FRESHNESS = new Set<GitNexusFreshness>([
+  "fresh",
+  "stale",
+  "missing",
+  "unknown",
+  "not_applicable",
+]);
+const DEEP_REGRESSION_CONCERN_SEVERITIES = new Set<DeepRegressionConcernSeverity>([
+  "P0",
+  "P1",
+  "P2",
+  "P3",
+]);
 const IMPACT_LABEL_VALUES = new Set<ImpactLabelName>(IMPACT_LABELS.map((label) => label.name));
 const MERGE_RISK_LABEL_VALUES = new Set<MergeRiskLabelName>(
   MERGE_RISK_LABELS.map((label) => label.name),
@@ -1794,6 +1891,7 @@ const DECISION_SCHEMA_KEYS = new Set([
   "agentsPolicyStatus",
   "reviewFindings",
   "securityReview",
+  "deepRegressionReview",
   "realBehaviorProof",
   "prRating",
   "telegramVisibleProof",
@@ -1816,6 +1914,24 @@ const DECISION_SCHEMA_KEYS = new Set([
 ]);
 const EVIDENCE_SCHEMA_KEYS = new Set(["label", "detail", "file", "line", "command", "sha"]);
 const SECURITY_REVIEW_SCHEMA_KEYS = new Set(["status", "summary", "concerns"]);
+const DEEP_REGRESSION_REVIEW_SCHEMA_KEYS = new Set([
+  "status",
+  "riskLevel",
+  "surfaceCategories",
+  "summary",
+  "graphContextUsed",
+  "graphContextFreshness",
+  "concerns",
+  "requiredMaintainerAction",
+]);
+const DEEP_REGRESSION_CONCERN_SCHEMA_KEYS = new Set([
+  "title",
+  "body",
+  "severity",
+  "confidenceScore",
+  "file",
+  "line",
+]);
 const REAL_BEHAVIOR_PROOF_SCHEMA_KEYS = new Set([
   "status",
   "summary",
@@ -1898,6 +2014,7 @@ const REVIEW_SECTIONS = {
   rootCauseCluster: "Root-Cause Cluster",
   reviewFindings: "Review Findings",
   securityReview: "Security Review",
+  deepRegressionReview: "Deep Regression Review",
   realBehaviorProof: "Real Behavior Proof",
   prRating: "PR Rating",
   telegramVisibleProof: "Telegram Visible Proof",
@@ -2435,7 +2552,12 @@ function reviewTimelineDigestParts(entries: unknown): unknown {
     }));
 }
 
-function itemContentDigest(item: Item, context: ItemContext, git?: GitInfo): string {
+function itemContentDigest(
+  item: Item,
+  context: ItemContext,
+  git?: GitInfo,
+  options: ReviewContentDigestOptions = {},
+): string {
   const isPull = item.kind === "pull_request";
   const pull = asRecord(context.pullRequest);
   const base = asRecord(pull.base);
@@ -2472,12 +2594,18 @@ function itemContentDigest(item: Item, context: ItemContext, git?: GitInfo): str
         ? (context.pullReviewCommentsRevision ??
           reviewCommentDigestParts(context.pullReviewComments))
         : null,
+      gitnexusContext: options.gitnexusContext ?? { enabled: false },
     }),
   );
 }
 
-export function itemContentDigestForTest(item: Item, context: ItemContext, git?: GitInfo): string {
-  return itemContentDigest(item, context, git);
+export function itemContentDigestForTest(
+  item: Item,
+  context: ItemContext,
+  git?: GitInfo,
+  options?: ReviewContentDigestOptions,
+): string {
+  return itemContentDigest(item, context, git, options);
 }
 
 function reviewPolicyHash(options: {
@@ -2912,6 +3040,54 @@ function parseSecurityReview(value: unknown, path: string): SecurityReview {
   };
 }
 
+function parseDeepRegressionConcern(value: unknown, path: string): DeepRegressionConcern {
+  const record = requireRecord(value, path);
+  rejectUnexpectedKeys(record, DEEP_REGRESSION_CONCERN_SCHEMA_KEYS, path);
+  const line = requireNullableInteger(record.line, `${path}.line`);
+  if (line !== null && line <= 0) throw new Error(`${path}.line must be positive`);
+  return {
+    title: requireString(record.title, `${path}.title`),
+    body: requireString(record.body, `${path}.body`),
+    severity: requireEnum(record.severity, DEEP_REGRESSION_CONCERN_SEVERITIES, `${path}.severity`),
+    confidenceScore: requireConfidenceScore(record.confidenceScore, `${path}.confidenceScore`),
+    file: requireNullableString(record.file, `${path}.file`),
+    line,
+  };
+}
+
+function parseDeepRegressionReview(value: unknown, path: string): DeepRegressionReview {
+  const record = requireRecord(value, path);
+  rejectUnexpectedKeys(record, DEEP_REGRESSION_REVIEW_SCHEMA_KEYS, path);
+  const concerns = Array.isArray(record.concerns)
+    ? record.concerns.map((entry, index) =>
+        parseDeepRegressionConcern(entry, `${path}.concerns[${index}]`),
+      )
+    : (() => {
+        throw new Error(`${path}.concerns must be an array`);
+      })();
+  return {
+    status: requireEnum(record.status, DEEP_REGRESSION_REVIEW_STATUSES, `${path}.status`),
+    riskLevel: requireEnum(record.riskLevel, DEEP_REGRESSION_RISK_LEVELS, `${path}.riskLevel`),
+    surfaceCategories: requireEnumArray(
+      record.surfaceCategories,
+      DEEP_REGRESSION_SURFACE_CATEGORIES,
+      `${path}.surfaceCategories`,
+    ),
+    summary: requireString(record.summary, `${path}.summary`),
+    graphContextUsed: requireBoolean(record.graphContextUsed, `${path}.graphContextUsed`),
+    graphContextFreshness: requireEnum(
+      record.graphContextFreshness,
+      DEEP_REGRESSION_GRAPH_CONTEXT_FRESHNESS,
+      `${path}.graphContextFreshness`,
+    ),
+    concerns,
+    requiredMaintainerAction: requireString(
+      record.requiredMaintainerAction,
+      `${path}.requiredMaintainerAction`,
+    ),
+  };
+}
+
 function parseRealBehaviorProof(value: unknown, path: string): RealBehaviorProof {
   const record = requireRecord(value, path);
   rejectUnexpectedKeys(record, REAL_BEHAVIOR_PROOF_SCHEMA_KEYS, path);
@@ -3256,6 +3432,10 @@ export function parseDecision(value: unknown, item?: DecisionNormalizationItem):
     ),
     reviewFindings,
     securityReview: parseSecurityReview(record.securityReview, "decision.securityReview"),
+    deepRegressionReview: parseDeepRegressionReview(
+      record.deepRegressionReview,
+      "decision.deepRegressionReview",
+    ),
     realBehaviorProof: parseRealBehaviorProof(
       record.realBehaviorProof,
       "decision.realBehaviorProof",
@@ -7257,9 +7437,31 @@ function mediaProofRuntimePrompt(summary: string | undefined, manifestPath: stri
 `;
 }
 
+function deepRegressionRuntimePrompt(
+  risk: OpenClawDeepRegressionRiskPacket | undefined,
+  gitnexusContextMarkdown: string | undefined,
+): string {
+  if (!risk && !gitnexusContextMarkdown?.trim()) return "";
+  const riskPrompt = risk ? renderOpenClawDeepRegressionRiskForPrompt(risk) : "";
+  const graphPrompt = gitnexusContextMarkdown?.trim() ?? "";
+  return `
+## Deep Regression Review Inputs
+
+- Complete the \`deepRegressionReview\` field for every response.
+- For high or critical risk PRs, run this as an independent adversarial pass: ask whether the branch solves the real problem, duplicates an existing architecture, stacks code on a broken path, or risks hidden core/runtime/auth/session/security/provider/release regressions.
+- GitNexus context, when present, is advisory only; the live PR diff, checkout, and GitHub metadata remain authoritative.
+- If GitNexus context is stale, missing, unknown, or unavailable, record that freshness honestly and do not claim graph-backed safety.
+- If the high-risk pass finds a P0-P2 concern, reflect it in \`overallCorrectness\`, \`maintainerDecision\`, and \`reviewFindings\` when the concern is concrete enough for file/line feedback.
+
+${riskPrompt}
+${graphPrompt}
+`;
+}
+
 function mediaProofRuntimeHints(
   proofScratchDir: string,
   preparedMediaProof: PreparedMediaProof,
+  gitnexusContextMarkdown?: string,
 ): ReviewPromptRuntimeHints {
   const hints: ReviewPromptRuntimeHints = { proofScratchDir };
   if (preparedMediaProof.manifestPath)
@@ -7267,7 +7469,96 @@ function mediaProofRuntimeHints(
   if (preparedMediaProof.summaryPath && preparedMediaProof.artifacts.length) {
     hints.mediaProofSummary = mediaProofSummaryMarkdown(preparedMediaProof);
   }
+  if (gitnexusContextMarkdown?.trim()) hints.gitnexusContextMarkdown = gitnexusContextMarkdown;
   return hints;
+}
+
+function gitnexusContextEnabled(): boolean {
+  return process.env.CLAWSWEEPER_GITNEXUS_CONTEXT?.trim() === "1";
+}
+
+function gitnexusIncludeStaleContext(): boolean {
+  return process.env.CLAWSWEEPER_GITNEXUS_INCLUDE_STALE?.trim() === "1";
+}
+
+function gitnexusAliasMap(): Record<string, string> {
+  const alias = process.env.CLAWSWEEPER_GITNEXUS_ALIAS_OPENCLAW?.trim() || "openclaw";
+  return { "openclaw/openclaw": alias };
+}
+
+function buildGitNexusContextForReview(options: {
+  item: Item;
+  context: ItemContext;
+  git: GitInfo;
+  openclawDir: string;
+}): GitNexusContextPacket | null {
+  if (options.item.kind !== "pull_request") return null;
+  if (!gitnexusContextEnabled()) return null;
+  if (!isGitNexusContextTargetRepo(options.item.repo)) return null;
+  const headSha = pullHeadShaFromContext(options.context);
+  return buildGitNexusContextPacket({
+    enabled: true,
+    repo: options.item.repo,
+    repoPath: options.openclawDir,
+    pullRequestNumber: options.item.number,
+    baseSha: options.git.mainSha,
+    headSha,
+    changedFiles: deepRegressionRiskFilesFromContext(options.context),
+    repoAliases: gitnexusAliasMap(),
+    includeStaleContext: gitnexusIncludeStaleContext(),
+  });
+}
+
+function isGitNexusContextTargetRepo(repo: string): boolean {
+  return normalizeRepo(repo) === "openclaw/openclaw";
+}
+
+function gitnexusReviewCacheState(
+  packet: GitNexusContextPacket | null,
+  repo: string,
+): GitNexusReviewCacheState {
+  const enabled = gitnexusContextEnabled() && isGitNexusContextTargetRepo(repo);
+  return {
+    enabled,
+    freshness: packet?.gitnexus.freshness ?? (enabled ? "missing" : null),
+    contentSha256: packet?.contentSha256 ?? null,
+    alias: enabled
+      ? (packet?.gitnexus.alias ?? gitnexusAliasMap()["openclaw/openclaw"] ?? null)
+      : null,
+    includeStaleContext: enabled ? gitnexusIncludeStaleContext() : false,
+    expectedContextWindowTokens: expectedContextWindowTokensFromEnv(),
+  };
+}
+
+export function gitnexusReviewCacheStateForTest(
+  packet: GitNexusContextPacket | null,
+  repo: string,
+): GitNexusReviewCacheState {
+  return gitnexusReviewCacheState(packet, repo);
+}
+
+function expectedContextWindowTokensFromEnv(): number | null {
+  const raw = process.env.CLAWSWEEPER_EXPECTED_CONTEXT_WINDOW_TOKENS?.trim();
+  if (!raw) return null;
+  const value = Number(raw);
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+
+function reviewContextBudgetTelemetry(
+  promptChars: number,
+): Pick<
+  ReviewRuntime,
+  "expectedContextWindowTokens" | "estimatedPromptTokens" | "contextBudgetStatus"
+> {
+  const expectedContextWindowTokens = expectedContextWindowTokensFromEnv();
+  const estimatedPromptTokens = Math.ceil((promptChars / 4) * 1.15) + 4096;
+  const contextBudgetStatus =
+    expectedContextWindowTokens === null
+      ? "unknown_window"
+      : estimatedPromptTokens <= expectedContextWindowTokens
+        ? "within_budget"
+        : "overflow";
+  return { expectedContextWindowTokens, estimatedPromptTokens, contextBudgetStatus };
 }
 
 export function proofVideoUrlsFromContextForTest(context: ItemContext): string[] {
@@ -7299,6 +7590,10 @@ function buildReviewPrompt(
   const mediaProofPrompt = mediaProofRuntimePrompt(
     runtimeHints.mediaProofSummary,
     runtimeHints.mediaProofManifestPath,
+  );
+  const deepRegressionPrompt = deepRegressionRuntimePrompt(
+    context.deepRegressionRisk,
+    runtimeHints.gitnexusContextMarkdown,
   );
   const extra = additionalPrompt.trim()
     ? `
@@ -7332,6 +7627,7 @@ ${additionalPrompt.trim()}
 - The target checkout is read-only for review. Do not modify repository files; use the scratch directory or /tmp for downloaded evidence and generated video stills/contact sheets.
 - A token-light maturity helper is available at ${maturityHelperPath}. For issue maturity labels, first run \`node "$CLAWSWEEPER_PROOF_SCRATCH_DIR/maturity-stable-shortlist.mjs"\` from the target checkout and compare the issue against that shortlist; read the full scorecard or taxonomy only if the shortlist is ambiguous.
 ${mediaProofPrompt}
+${deepRegressionPrompt}
 
 ## GitHub Context
 
@@ -7482,6 +7778,19 @@ function annotateDegradedReview(
   };
 }
 
+function defaultDeepRegressionReview(summary: string): DeepRegressionReview {
+  return {
+    status: "not_applicable",
+    riskLevel: "standard",
+    surfaceCategories: [],
+    summary,
+    graphContextUsed: false,
+    graphContextFreshness: "not_applicable",
+    concerns: [],
+    requiredMaintainerAction: "",
+  };
+}
+
 function codexFailureDecision(
   status: number | null,
   detail: string,
@@ -7576,6 +7885,9 @@ function codexFailureDecision(
       summary: "Security review did not run because the Codex review failed before completion.",
       concerns: [],
     },
+    deepRegressionReview: defaultDeepRegressionReview(
+      "Deep regression review did not run because the Codex review failed before completion.",
+    ),
     realBehaviorProof: {
       status: "not_applicable",
       summary: "Real behavior proof was not assessed because the Codex review failed.",
@@ -9175,6 +9487,39 @@ function publicSecurityReviewLine(review: SecurityReview): string {
   return `${prefix}: ${sentence(review.summary)}`;
 }
 
+function deepRegressionConcernLocation(concern: DeepRegressionConcern): string {
+  if (!concern.file) return "not tied to a single file";
+  return `${concern.file}${concern.line ? `:${concern.line}` : ""}`;
+}
+
+function deepRegressionConcernSummaryLine(concern: DeepRegressionConcern): string {
+  const location = deepRegressionConcernLocation(concern);
+  const suffix = location === "not tied to a single file" ? "" : ` — \`${location}\``;
+  return `- [${concern.severity}] ${concern.title.trim()}${suffix}`;
+}
+
+function deepRegressionConcernDetailedLine(concern: DeepRegressionConcern): string {
+  return [
+    deepRegressionConcernSummaryLine(concern),
+    `  ${sentence(concern.body)}`,
+    `  Confidence: ${confidenceText(concern.confidenceScore)}`,
+  ].join("\n");
+}
+
+function publicDeepRegressionReviewLine(review: DeepRegressionReview): string {
+  if (review.status === "not_applicable" && review.concerns.length === 0) return "";
+  const prefix =
+    review.status === "blocked"
+      ? "Blocked"
+      : review.status === "needs_attention"
+        ? "Needs attention"
+        : review.status === "cleared"
+          ? "Cleared"
+          : "Not applicable";
+  const risk = review.riskLevel === "standard" ? "" : ` ${review.riskLevel}-risk`;
+  return `${prefix}${risk}: ${sentence(review.summary)}`;
+}
+
 function realBehaviorProofReReviewGuidance(): string {
   return "After adding proof, update the PR body; ClawSweeper should re-review automatically. If it does not, the PR author or someone with repository write access can comment `@clawsweeper re-review`.";
 }
@@ -9849,6 +10194,86 @@ function reportSecurityReview(markdown: string): SecurityReview {
   }
   if (current) concerns.push(current);
   return { status, summary, concerns };
+}
+
+function defaultDeepRegressionReviewForReport(markdown: string): DeepRegressionReview {
+  const type = frontMatterValue(markdown, "type");
+  return defaultDeepRegressionReview(
+    type === "pull_request"
+      ? "No deep regression review was recorded in this older report."
+      : "Deep regression review is not applicable to non-PR issue triage.",
+  );
+}
+
+function reportDeepRegressionReview(markdown: string): DeepRegressionReview {
+  const section = reviewSectionValue(markdown, "deepRegressionReview");
+  if (!section.trim()) return defaultDeepRegressionReviewForReport(markdown);
+  const statusValue = sectionLineValue(section, "Status");
+  const riskValue = sectionLineValue(section, "Risk level");
+  const graphFreshnessValue = sectionLineValue(section, "Graph context freshness");
+  const summary = sectionLineValue(section, "Summary");
+  const graphContextUsed = sectionLineValue(section, "Graph context used");
+  const requiredMaintainerAction = sectionLineValue(section, "Required maintainer action") ?? "";
+  const categories = (sectionLineValue(section, "Surface categories") ?? "")
+    .split(",")
+    .map((category) => category.trim())
+    .filter((category): category is OpenClawDeepRegressionSurfaceCategory =>
+      DEEP_REGRESSION_SURFACE_CATEGORIES.has(category as OpenClawDeepRegressionSurfaceCategory),
+    );
+  const status = DEEP_REGRESSION_REVIEW_STATUSES.has(statusValue as DeepRegressionReviewStatus)
+    ? (statusValue as DeepRegressionReviewStatus)
+    : undefined;
+  const riskLevel = DEEP_REGRESSION_RISK_LEVELS.has(riskValue as OpenClawDeepRegressionRiskLevel)
+    ? (riskValue as OpenClawDeepRegressionRiskLevel)
+    : undefined;
+  const graphContextFreshness = DEEP_REGRESSION_GRAPH_CONTEXT_FRESHNESS.has(
+    graphFreshnessValue as GitNexusFreshness,
+  )
+    ? (graphFreshnessValue as GitNexusFreshness)
+    : undefined;
+  if (!status || !riskLevel || !graphContextFreshness || !summary) {
+    return defaultDeepRegressionReviewForReport(markdown);
+  }
+
+  const concerns: DeepRegressionConcern[] = [];
+  let current: DeepRegressionConcern | null = null;
+  for (const line of section.split("\n")) {
+    const heading = parseDeepRegressionConcernHeading(line);
+    if (heading) {
+      if (current) concerns.push(current);
+      current = {
+        title: heading.title,
+        body: "",
+        severity: heading.severity,
+        confidenceScore: 0,
+        file: heading.file,
+        line: heading.line,
+      };
+      continue;
+    }
+    if (!current) continue;
+    const body = line.match(/^\s+- body: (.*)$/);
+    if (body?.[1]) {
+      current.body = body[1];
+      continue;
+    }
+    const confidence = line.match(/^\s+- confidence: ([0-9.]+)$/);
+    if (confidence?.[1]) {
+      const score = Number(confidence[1]);
+      current.confidenceScore = Number.isFinite(score) ? Math.min(1, Math.max(0, score)) : 0;
+    }
+  }
+  if (current) concerns.push(current);
+  return {
+    status,
+    riskLevel,
+    surfaceCategories: categories,
+    summary,
+    graphContextUsed: graphContextUsed === "true",
+    graphContextFreshness,
+    concerns,
+    requiredMaintainerAction,
+  };
 }
 
 function defaultRealBehaviorProof(markdown: string): RealBehaviorProof {
@@ -11125,6 +11550,42 @@ function prSurfaceFilesFromContext(context: ItemContext): PrSurfaceFile[] {
       };
     })
     .filter((entry): entry is PrSurfaceFile => Boolean(entry));
+}
+
+function deepRegressionRiskFilesFromContext(
+  context: ItemContext,
+): OpenClawDeepRegressionRiskFile[] {
+  if (context.counts?.pullFilesTruncated) return [];
+  return (context.pullFiles ?? []).flatMap((entry): OpenClawDeepRegressionRiskFile[] => {
+    const file = asRecord(entry);
+    const path = typeof file.filename === "string" ? file.filename.trim() : "";
+    if (!path) return [];
+    return [
+      {
+        path,
+        additions: nonNegativeInteger(file.additions),
+        deletions: nonNegativeInteger(file.deletions),
+      },
+    ];
+  });
+}
+
+function pullRequestBodyFromContext(context: ItemContext): string {
+  const pull = asRecord(context.pullRequest);
+  const issue = asRecord(context.issue);
+  if (typeof pull.body === "string") return pull.body;
+  if (typeof issue.body === "string") return issue.body;
+  return "";
+}
+
+function attachDeepRegressionRisk(item: Item, context: ItemContext): void {
+  context.deepRegressionRisk = classifyOpenClawDeepRegressionRisk({
+    repo: item.repo,
+    itemKind: item.kind,
+    title: item.title,
+    body: pullRequestBodyFromContext(context),
+    files: deepRegressionRiskFilesFromContext(context),
+  });
 }
 
 function nonNegativeInteger(value: unknown): number {
@@ -12423,6 +12884,16 @@ function realBehaviorProofBlocksMerge(markdown: string): boolean {
   );
 }
 
+function deepRegressionReviewBlocksAutomation(markdown: string): boolean {
+  if (frontMatterValue(markdown, "review_status") === "failed") return false;
+  if (frontMatterValue(markdown, "type") !== "pull_request") return false;
+  const review = reportDeepRegressionReview(markdown);
+  return (
+    review.status === "blocked" ||
+    (review.status === "needs_attention" && review.concerns.length > 0)
+  );
+}
+
 function realBehaviorProofNeedsContributorNudge(markdown: string): boolean {
   if (frontMatterValue(markdown, "review_status") !== "complete") return false;
   if (!isExternalPullRequestReport(markdown)) return false;
@@ -13049,6 +13520,34 @@ function parseSecurityConcernHeading(line: string): {
   };
 }
 
+function parseDeepRegressionConcernHeading(line: string): {
+  severity: DeepRegressionConcernSeverity;
+  title: string;
+  file: string | null;
+  line: number | null;
+} | null {
+  const prefix = "- **[";
+  if (!line.startsWith(prefix)) return null;
+  const severityEnd = line.indexOf("] ", prefix.length);
+  if (severityEnd === -1) return null;
+  const severity = line.slice(prefix.length, severityEnd);
+  if (!DEEP_REGRESSION_CONCERN_SEVERITIES.has(severity as DeepRegressionConcernSeverity)) {
+    return null;
+  }
+  const titleStart = severityEnd + 2;
+  const titleEnd = line.indexOf(":**", titleStart);
+  if (titleEnd === -1) return null;
+
+  const locationText = line.slice(titleEnd + 3).trim();
+  const location = locationText ? parseBacktickLocation(locationText) : null;
+  return {
+    severity: severity as DeepRegressionConcernSeverity,
+    title: line.slice(titleStart, titleEnd),
+    file: location?.file ?? null,
+    line: location?.lineStart ?? null,
+  };
+}
+
 function parseBacktickLocation(value: string): {
   file: string;
   lineStart: number;
@@ -13173,6 +13672,7 @@ function reportDecision(markdown: string, closeReason: CloseReason): Decision {
     agentsPolicyStatus: reportAgentsPolicyStatus(markdown) ?? defaultAgentsPolicyStatus(),
     reviewFindings: reportReviewFindings(markdown),
     securityReview: reportSecurityReview(markdown),
+    deepRegressionReview: reportDeepRegressionReview(markdown),
     realBehaviorProof: reportRealBehaviorProof(markdown),
     prRating: reportPrRating(markdown),
     telegramVisibleProof: reportTelegramVisibleProof(markdown),
@@ -14827,6 +15327,12 @@ function reviewContextLedger(context: ItemContext): ReviewContextLedgerEntry[] {
       truncated: counts?.pullReviewCommentsTruncated,
     }),
     reviewContextLedgerEntry({
+      section: "deepRegressionRisk",
+      label: "deep regression risk",
+      value: context.deepRegressionRisk ?? null,
+      entries: context.deepRegressionRisk ? 1 : 0,
+    }),
+    reviewContextLedgerEntry({
       section: "counts",
       label: "context counts",
       value: counts ?? {},
@@ -15333,6 +15839,7 @@ function renderKeepOpenCommentFromReport(
   const likelyOwners = reportLikelyOwners(markdown).slice(0, 5).map(likelyOwnerLine);
   const reviewFindings = reportReviewFindings(markdown);
   const securityReview = reportSecurityReview(markdown);
+  const deepRegressionReview = reportDeepRegressionReview(markdown);
   const realBehaviorProof = reportRealBehaviorProof(markdown);
   const prRating = reportPrRating(markdown);
   const mantisRecommendation = reportMantisRecommendation(markdown);
@@ -15359,13 +15866,14 @@ function renderKeepOpenCommentFromReport(
   const isRepairLoopPass = isPullRequest && Boolean(repairLoopPassModeFromReport(markdown));
   const hasRealBehaviorProofBlocker =
     isPullRequest && !reviewFailed && realBehaviorProofBlocksMerge(markdown);
+  const hasDeepRegressionBlocker = deepRegressionReviewBlocksAutomation(markdown);
   const summaryLine = sentence(summary) || "_No summary provided._";
   const changeSummaryLine = sentence(changeSummary || summary) || "_No change summary provided._";
   const fallbackNextStep =
     "Continue tracking this item until the missing behavior is implemented or a maintainer decides the product direction.";
   const nextStepLine = sentence(workReason || bestSolution || fallbackNextStep);
   const publicNextStepLine = isPullRequest
-    ? hasRealBehaviorProofBlocker
+    ? hasRealBehaviorProofBlocker || hasDeepRegressionBlocker
       ? publicPriorityBulletFromText(nextStepLine, "P1")
       : publicPriorityBulletIfActionable(nextStepLine, "P2")
     : nextStepLine;
@@ -15379,17 +15887,19 @@ function renderKeepOpenCommentFromReport(
   const hasReviewFindings = isPullRequest && reviewFindings.length > 0;
   const verdictLine = reviewFailed
     ? "ClawSweeper review: did not complete due to Codex infrastructure failure."
-    : hasRealBehaviorProofBlocker
-      ? "Codex review: needs real behavior proof before merge."
-      : isRepairLoopPass
-        ? "Codex review: passed."
-        : isPullRequest && isRepairCandidate
-          ? "Codex review: needs changes before merge."
-          : hasReviewFindings
-            ? "Codex review: found issues before merge."
-            : isPullRequest
-              ? "Codex review: needs maintainer review before merge."
-              : "Codex review: keeping this open for maintainer follow-up; there is still a little grit to resolve.";
+    : hasDeepRegressionBlocker
+      ? "Codex review: found deep regression risk before merge."
+      : hasRealBehaviorProofBlocker
+        ? "Codex review: needs real behavior proof before merge."
+        : isRepairLoopPass
+          ? "Codex review: passed."
+          : isPullRequest && isRepairCandidate
+            ? "Codex review: needs changes before merge."
+            : hasReviewFindings
+              ? "Codex review: found issues before merge."
+              : isPullRequest
+                ? "Codex review: needs maintainer review before merge."
+                : "Codex review: keeping this open for maintainer follow-up; there is still a little grit to resolve.";
   const lines = [`${verdictLine}${reviewFreshnessText(markdown)}`, ""];
   const prSurface = renderOpenClawPrSurfaceFromReport(markdown);
   const prSurfaceSummary = prSurface.split("\n\n", 1)[0]?.trim() ?? "";
@@ -15451,6 +15961,10 @@ function renderKeepOpenCommentFromReport(
   }
   const securityLine = publicSecurityReviewLine(securityReview);
   if (securityLine) appendPublicSection(lines, "Security", securityLine);
+  const deepRegressionLine = publicDeepRegressionReviewLine(deepRegressionReview);
+  if (deepRegressionLine) {
+    appendPublicSection(lines, "Deep regression review", deepRegressionLine);
+  }
   if (isPullRequest && reviewFindings.length) {
     lines.push("**Review findings**", ...reviewFindings.slice(0, 3).map(reviewFindingSummaryLine));
   }
@@ -15496,6 +16010,14 @@ function renderKeepOpenCommentFromReport(
       "Security concerns:",
       "",
       ...securityReview.concerns.map(securityConcernDetailedLine),
+    );
+  }
+  if (deepRegressionReview.concerns.length) {
+    evidenceDetails.push(
+      ...(evidenceDetails.length ? [""] : []),
+      "Deep regression concerns:",
+      "",
+      ...deepRegressionReview.concerns.map(deepRegressionConcernDetailedLine),
     );
   }
   const agentsPolicyLine = agentsPolicyStatusLine(agentsPolicyStatus);
@@ -15569,8 +16091,12 @@ export function renderReviewCommentFromReport(
 ): string {
   const decision = frontMatterValue(markdown, "decision");
   const requiresMaintainerDecision = maintainerDecisionFromReport(markdown)?.required === true;
+  const deepRegressionBlocksClose = deepRegressionReviewBlocksAutomation(markdown);
   const body =
-    decision === "close" && reason !== "none" && !requiresMaintainerDecision
+    decision === "close" &&
+    reason !== "none" &&
+    !requiresMaintainerDecision &&
+    !deepRegressionBlocksClose
       ? renderCloseCommentFromReport(markdown, reason)
       : renderKeepOpenCommentFromReport(markdown, options);
   const markers = reviewAutomationMarkersFromReport(markdown);
@@ -15655,6 +16181,9 @@ function unconfirmedProductDirectionDecisionBlockReason(
   }
   if (decision.securityReview.status !== "cleared" || decision.securityReview.concerns.length > 0) {
     return "unconfirmed_product_direction requires a cleared security review";
+  }
+  if (decision.deepRegressionReview.status !== "cleared") {
+    return "unconfirmed_product_direction requires a cleared deep regression review";
   }
   if (decision.overallCorrectness !== "patch is correct" || decision.reviewFindings.length > 0) {
     return "unconfirmed_product_direction requires a correct patch with no review findings";
@@ -15759,6 +16288,18 @@ export function validateCloseDecision(
       ok: false,
       actionTaken: "skipped_invalid_decision",
       reason: `${decision.closeReason} is not allowed for ${profile.targetRepo} ${item.kind} apply policy`,
+    };
+  }
+  if (
+    item.kind === "pull_request" &&
+    (decision.deepRegressionReview.status === "blocked" ||
+      (decision.deepRegressionReview.status === "needs_attention" &&
+        decision.deepRegressionReview.concerns.length > 0))
+  ) {
+    return {
+      ok: false,
+      actionTaken: "skipped_invalid_decision",
+      reason: "pull request has unresolved deep regression review concerns",
     };
   }
   if (item.kind !== "pull_request" && decision.closeReason === "mostly_implemented_on_main") {
@@ -16048,9 +16589,14 @@ export function reviewAutomationMarkersFromReport(markdown: string): string {
     return humanReviewMarkers();
   }
   const hasRealBehaviorProofBlocker = realBehaviorProofBlocksMerge(markdown);
+  const hasDeepRegressionBlocker = deepRegressionReviewBlocksAutomation(markdown);
   if (securityNeedsAttention) {
     const markers = [`<!-- clawsweeper-security:security-sensitive ${baseAttrs} -->`];
-    if (!hasRealBehaviorProofBlocker && securitySensitiveRepairAllowed(markdown)) {
+    if (
+      !hasRealBehaviorProofBlocker &&
+      !hasDeepRegressionBlocker &&
+      securitySensitiveRepairAllowed(markdown)
+    ) {
       markers.push(
         `<!-- clawsweeper-verdict:needs-changes ${baseAttrs} -->`,
         `<!-- clawsweeper-action:fix-required ${baseAttrs} finding=security-review -->`,
@@ -16061,6 +16607,9 @@ export function reviewAutomationMarkersFromReport(markdown: string): string {
     return markers.join("\n");
   }
   if (hasRealBehaviorProofBlocker) {
+    return `<!-- clawsweeper-verdict:needs-human ${baseAttrs} -->`;
+  }
+  if (hasDeepRegressionBlocker) {
     return `<!-- clawsweeper-verdict:needs-human ${baseAttrs} -->`;
   }
   if (decision === "keep_open") {
@@ -16113,6 +16662,7 @@ function repairLoopFindingRepairAllowed(markdown: string): boolean {
   return (
     (labels.includes(AUTOMERGE_LABEL) || labels.includes(AUTOFIX_LABEL)) &&
     !realBehaviorProofBlocksMerge(markdown) &&
+    !deepRegressionReviewBlocksAutomation(markdown) &&
     reportReviewFindings(markdown).length > 0
   );
 }
@@ -16127,6 +16677,7 @@ function isRepairLoopPassReport(markdown: string): boolean {
     !configSurfaceReviewRequired(markdown) &&
     !dataModelSurfaceReviewRequired(markdown) &&
     !realBehaviorProofBlocksMerge(markdown) &&
+    !deepRegressionReviewBlocksAutomation(markdown) &&
     reportOverallCorrectness(markdown) === "patch is correct" &&
     reportReviewFindings(markdown).length === 0
   );
@@ -16842,6 +17393,49 @@ function renderSecurityReviewReportSection(decision: Decision): string {
   return lines.join("\n");
 }
 
+function renderDeepRegressionReviewReportSection(decision: Decision): string {
+  const review = decision.deepRegressionReview;
+  const lines = [
+    `Status: ${review.status}`,
+    "",
+    `Risk level: ${review.riskLevel}`,
+    "",
+    `Surface categories: ${review.surfaceCategories.join(", ") || "none"}`,
+    "",
+    `Graph context used: ${review.graphContextUsed}`,
+    "",
+    `Graph context freshness: ${review.graphContextFreshness}`,
+    "",
+    `Summary: ${sentence(review.summary)}`,
+    "",
+    `Required maintainer action: ${sentence(review.requiredMaintainerAction)}`,
+    "",
+    "Concerns:",
+    "",
+  ];
+  if (!review.concerns.length) {
+    lines.push("- none");
+    return lines.join("\n");
+  }
+  lines.push(
+    review.concerns
+      .map((concern) => {
+        const location = deepRegressionConcernLocation(concern);
+        const heading =
+          location === "not tied to a single file"
+            ? `- **[${concern.severity}] ${concern.title}:**`
+            : `- **[${concern.severity}] ${concern.title}:** \`${location}\``;
+        return [
+          heading,
+          `  - body: ${sentence(concern.body)}`,
+          `  - confidence: ${confidenceText(concern.confidenceScore)}`,
+        ].join("\n");
+      })
+      .join("\n"),
+  );
+  return lines.join("\n");
+}
+
 function renderRealBehaviorProofReportSection(decision: Decision): string {
   return [
     `Status: ${decision.realBehaviorProof.status}`,
@@ -17010,6 +17604,7 @@ function markdownFor(options: {
   const rootCauseCluster = renderRootCauseClusterReportSection(options.decision);
   const reviewFindings = renderReviewFindingsReportSection(options.decision);
   const securityReview = renderSecurityReviewReportSection(options.decision);
+  const deepRegressionReview = renderDeepRegressionReviewReportSection(options.decision);
   const realBehaviorProof = renderRealBehaviorProofReportSection(options.decision);
   const prRating = renderPrRatingReportSection(options.decision);
   const telegramVisibleProof = renderTelegramVisibleProofReportSection(options.decision);
@@ -17062,6 +17657,18 @@ review_schema_chars: ${reviewTelemetryNumber(options.runtime.schemaChars)}
 review_additional_prompt_chars: ${reviewTelemetryNumber(options.runtime.additionalPromptChars)}
 review_context_elapsed_ms: ${reviewTelemetryNumber(options.runtime.contextElapsedMs)}
 review_codex_elapsed_ms: ${reviewTelemetryNumber(options.runtime.codexElapsedMs)}
+gitnexus_context_freshness: ${options.runtime.gitnexusContextFreshness ?? "not_applicable"}
+gitnexus_context_sha256: ${options.runtime.gitnexusContextSha256 ?? "none"}
+gitnexus_context_content_sha256: ${options.runtime.gitnexusContextContentSha256 ?? "none"}
+gitnexus_context_bytes: ${reviewTelemetryNumber(options.runtime.gitnexusContextBytes)}
+expected_context_window_tokens: ${
+    options.runtime.expectedContextWindowTokens === null ||
+    options.runtime.expectedContextWindowTokens === undefined
+      ? "unknown"
+      : options.runtime.expectedContextWindowTokens
+  }
+estimated_prompt_tokens: ${reviewTelemetryNumber(options.runtime.estimatedPromptTokens)}
+context_budget_status: ${options.runtime.contextBudgetStatus ?? "unknown_window"}
 review_mode: ${options.reviewMode}
 review_status: ${options.decision.summary.startsWith("Codex review failed") ? "failed" : "complete"}
 review_terminal_failure: ${options.decision.codexTerminalFailure === true}
@@ -17119,6 +17726,12 @@ auto_implementation_candidate: ${options.decision.autoImplementationCandidate}
 real_behavior_proof_status: ${options.decision.realBehaviorProof.status}
 real_behavior_proof_evidence_kind: ${options.decision.realBehaviorProof.evidenceKind}
 real_behavior_proof_needs_contributor_action: ${options.decision.realBehaviorProof.needsContributorAction}
+deep_regression_review_status: ${options.decision.deepRegressionReview.status}
+deep_regression_review_risk: ${options.decision.deepRegressionReview.riskLevel}
+deep_regression_review_surface_categories: ${jsonFrontMatterValue(options.decision.deepRegressionReview.surfaceCategories)}
+deep_regression_review_graph_context_used: ${options.decision.deepRegressionReview.graphContextUsed}
+deep_regression_review_graph_context_freshness: ${options.decision.deepRegressionReview.graphContextFreshness}
+deep_regression_review_concern_count: ${options.decision.deepRegressionReview.concerns.length}
 pr_rating_overall: ${options.decision.prRating.overallTier}
 pr_rating_proof: ${options.decision.prRating.proofTier}
 pr_rating_patch: ${options.decision.prRating.patchTier}
@@ -17208,6 +17821,10 @@ ${reviewFindings}
 ## ${REVIEW_SECTIONS.securityReview}
 
 ${securityReview}
+
+## ${REVIEW_SECTIONS.deepRegressionReview}
+
+${deepRegressionReview}
 
 ## ${REVIEW_SECTIONS.realBehaviorProof}
 
@@ -17616,8 +18233,17 @@ function reviewCommand(args: Args): void {
             fullTimelineForRelations: true,
             reviewCacheDigest: true,
           });
+      attachDeepRegressionRisk(item, context);
       const contextElapsedMs = Date.now() - contextStartedAt;
-      const contentDigest = itemContentDigest(item, context, git);
+      const gitnexusContext = buildGitNexusContextForReview({
+        item,
+        context,
+        git,
+        openclawDir,
+      });
+      const contentDigest = itemContentDigest(item, context, git, {
+        gitnexusContext: gitnexusReviewCacheState(gitnexusContext, item.repo),
+      });
       const priorReview =
         explicitDispatch || maintainerRequest ? null : existingReview(item, itemsDir);
       if (
@@ -17663,13 +18289,17 @@ function reviewCommand(args: Args): void {
       const preparedMediaProof: PreparedMediaProof = localRangeData
         ? { manifestPath: null, summaryPath: null, artifacts: [] }
         : prepareMediaProofArtifacts(context, proofScratchDir);
+      const gitnexusContextMarkdown = gitnexusContext
+        ? renderGitNexusContextPacketForPrompt(gitnexusContext)
+        : undefined;
       const prompt = buildReviewPrompt(
         item,
         context,
         git,
         additionalPrompt,
-        mediaProofRuntimeHints(proofScratchDir, preparedMediaProof),
+        mediaProofRuntimeHints(proofScratchDir, preparedMediaProof, gitnexusContextMarkdown),
       );
+      const contextBudget = reviewContextBudgetTelemetry(prompt.telemetry.promptChars);
       const snapshotHash = itemSnapshotHash(item, context);
       if (skipStartComment) {
         if (!humanLocalReview) {
@@ -17760,6 +18390,15 @@ function reviewCommand(args: Args): void {
         ...prompt.telemetry,
         contextElapsedMs,
         codexElapsedMs,
+        ...(gitnexusContext
+          ? {
+              gitnexusContextFreshness: gitnexusContext.gitnexus.freshness,
+              gitnexusContextSha256: gitnexusContext.sha256,
+              gitnexusContextContentSha256: gitnexusContext.contentSha256,
+              gitnexusContextBytes: gitnexusContext.estimatedBytes,
+            }
+          : {}),
+        ...contextBudget,
       };
       const action = reviewActionForDecision({ item, decision, git, runtime });
       const reportPath = join(artifactDir, reportFileName(item.repo, item.number));

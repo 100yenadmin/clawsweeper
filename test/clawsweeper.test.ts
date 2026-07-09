@@ -31,6 +31,7 @@ import {
   removeCurrentCursorTraceItem,
   reviewArtifactDestination,
   reviewCodexForcedLoginMethodForTest,
+  reviewPromptForTest,
   runtimeBudgetExceeded,
   safeOutputTail,
   shardItemNumbers,
@@ -118,6 +119,98 @@ test("close proposals that require maintainer decisions render as kept open", ()
   assert.doesNotMatch(comment, /Closing this PR/);
   assert.doesNotMatch(comment, /clawsweeper-verdict:close/);
   assert.doesNotMatch(comment, /clawsweeper-action:close-required/);
+});
+
+test("review comments surface blocked deep regression review", () => {
+  const report = `${workPlanCandidateReport({
+    repository: "openclaw/openclaw",
+    number: 4321,
+    type: "pull_request",
+    title: "Rewrite auth session refresh",
+    url: "https://github.com/openclaw/openclaw/pull/4321",
+    author: "contributor",
+    author_association: "CONTRIBUTOR",
+    pr_rating_overall: "D",
+    pr_rating_proof: "F",
+    pr_rating_patch: "D",
+  })}
+
+## What This Changes
+
+Rewrites auth session refresh handling.
+
+## Reproduction Assessment
+
+The PR touches auth session behavior.
+
+## Solution Assessment
+
+The proposed architecture is not proven safe.
+
+## Deep Regression Review
+
+Status: blocked
+
+Risk level: critical
+
+Surface categories: auth, session_state
+
+Graph context used: true
+
+Graph context freshness: fresh
+
+Summary: Auth/session changes need maintainer redesign review before merge.
+
+Required maintainer action: Do not merge until the session migration path is proven.
+
+Concerns:
+
+- **[P1] Session state can be dropped:** \`src/runtime/auth/session-store.ts:42\`
+  - body: The patch replaces refresh handling without preserving persisted session keys.
+  - confidence: 0.9
+`;
+
+  const comment = renderReviewCommentFromReport(report, "none");
+
+  assert.match(comment, /Codex review: found deep regression risk before merge/);
+  assert.match(comment, /\*\*Deep regression review\*\*/);
+  assert.match(comment, /Blocked critical-risk/);
+  assert.match(comment, /Session state can be dropped/);
+});
+
+test("review prompt includes deep regression risk and advisory graph context", () => {
+  const prompt = reviewPromptForTest(
+    item({
+      kind: "pull_request",
+      title: "Preserve auth session refresh",
+      url: "https://github.com/openclaw/openclaw/pull/77",
+    }),
+    {
+      issue: {},
+      comments: [],
+      timeline: [],
+      deepRegressionRisk: {
+        packetVersion: "openclaw-deep-regression-risk-v0.1",
+        riskLevel: "critical",
+        surfaceCategories: ["auth", "session_state"],
+        matchedFiles: ["src/runtime/auth/session-store.ts"],
+        reasons: ["Touches authentication, credentials, tokens, or login behavior."],
+        requiredChecks: ["Require exact auth/session-state proof before calling the PR safe."],
+      },
+      counts: { comments: 0, timeline: 0 },
+    },
+    { mainSha: "abc123", latestRelease: null },
+    "",
+    {
+      gitnexusContextMarkdown:
+        "## GitNexus Advisory Context\n\nThis packet is advisory; the current PR diff remains authoritative.\nFreshness: fresh\n",
+    },
+  );
+
+  assert.match(prompt, /## Deep Regression Review Inputs/);
+  assert.match(prompt, /Risk level: critical/);
+  assert.match(prompt, /GitNexus Advisory Context/);
+  assert.match(prompt, /current PR diff remains authoritative/);
 });
 
 test("apply-decisions archives live-closed skipped records without reopening close gates", () => {

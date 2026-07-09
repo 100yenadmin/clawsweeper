@@ -6,7 +6,40 @@ import { closeDecision, item, reportFrontMatter } from "./helpers.ts";
 
 test("decision parser enforces required schema-shaped evidence", () => {
   assert.equal(parseDecision(closeDecision()).decision, "close");
+  assert.equal(parseDecision(closeDecision()).deepRegressionReview.status, "not_applicable");
+  assert.equal(
+    parseDecision(
+      closeDecision({
+        deepRegressionReview: {
+          status: "blocked",
+          riskLevel: "critical",
+          surfaceCategories: ["auth", "session_state"],
+          summary: "Auth/session changes need maintainer redesign review.",
+          graphContextUsed: true,
+          graphContextFreshness: "fresh",
+          concerns: [
+            {
+              title: "Session state can be dropped",
+              body: "The patch replaces refresh handling without preserving persisted session keys.",
+              severity: "P1",
+              confidenceScore: 0.9,
+              file: "src/runtime/auth/session-store.ts",
+              line: 42,
+            },
+          ],
+          requiredMaintainerAction: "Do not merge until the session migration path is proven.",
+        },
+      }),
+      item({ kind: "pull_request" }),
+    ).deepRegressionReview.status,
+    "blocked",
+  );
   assert.equal(parseDecision(closeDecision({ itemCategory: "skill" })).itemCategory, "skill");
+  assert.throws(() => {
+    const decision = closeDecision();
+    delete decision.deepRegressionReview;
+    return parseDecision(decision);
+  }, /decision\.deepRegressionReview/);
   assert.throws(
     () =>
       parseDecision({

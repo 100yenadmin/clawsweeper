@@ -77,6 +77,7 @@ async function findCommandStatusComment(options: Options): Promise<LooseRecord |
     const match = selectCommandStatusComment(comments, options);
     if (match) {
       pruneDuplicateCommandAckComments({ comments, keep: match, options });
+      pruneStaleCommandStatusComments({ comments, keep: match, options });
       return match;
     }
     if (exact && !statusMarkerDiffersFromRequested(exact.body, options.marker)) return exact;
@@ -173,6 +174,47 @@ function pruneDuplicateCommandAckComments({
   }
 }
 
+function pruneStaleCommandStatusComments({
+  comments,
+  keep,
+  options,
+}: {
+  comments: LooseRecord[];
+  keep: LooseRecord;
+  options: Pick<Options, "marker" | "repo" | "trustedBots">;
+}) {
+  for (const comment of staleCommandStatusCommentsForPrune(comments, keep, options)) {
+    const id = Number(comment.id ?? 0) || 0;
+    try {
+      ghText(["api", `repos/${options.repo}/issues/comments/${id}`, "--method", "DELETE"]);
+    } catch (error) {
+      if (!/\b404\b|Not Found/i.test(String(error))) throw error;
+    }
+  }
+}
+
+export function staleCommandStatusCommentsForPrune(
+  comments: LooseRecord[],
+  keep: LooseRecord,
+  options: Pick<Options, "marker" | "trustedBots">,
+) {
+  const requested = parseCommandStatusMarker(options.marker);
+  if (requested?.intent !== "re_review") return [];
+  const keepId = Number(keep.id ?? 0) || 0;
+  return comments.filter((comment) => {
+    const id = Number(comment.id ?? 0) || 0;
+    if (id <= 0 || id === keepId) return false;
+    if (!isTrustedStatusComment(comment, options.trustedBots)) return false;
+    const parsed = parseCommandStatusMarker(commandStatusMarkerFromBody(comment.body) ?? "");
+    return Boolean(
+      parsed &&
+      parsed.marker !== requested.marker &&
+      parsed.itemNumber === requested.itemNumber &&
+      parsed.intent === requested.intent,
+    );
+  });
+}
+
 function commandAckComments(comments: LooseRecord[], marker: string, trustedBots: Set<string>) {
   return comments
     .filter(
@@ -192,6 +234,17 @@ function commandStatusMarkerFromBody(body: JsonValue) {
   return (
     String(body ?? "").match(new RegExp("<!--\\s*clawsweeper-command-status:[^>]+-->"))?.[0] ?? null
   );
+}
+
+function parseCommandStatusMarker(marker: string) {
+  const match = marker.match(/^<!--\s*clawsweeper-command-status:([^:>]+):([^:>]+):([^>]+)\s*-->$/);
+  if (!match) return null;
+  return {
+    marker,
+    itemNumber: match[1] ?? "",
+    intent: match[2] ?? "",
+    headSha: match[3] ?? "",
+  };
 }
 
 function statusMarkerDiffersFromRequested(body: JsonValue, requestedStatusMarker: string) {

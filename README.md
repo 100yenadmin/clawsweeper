@@ -638,6 +638,12 @@ Read the report at `artifacts/local-review-<number>/<number>.md`. Key fields are
 intentionally want to move reports into durable state or sync GitHub comments.
 Add `--verbose` when you need the underlying `[review]` diagnostic logs.
 
+Deep-regression review for OpenClaw high-risk PRs is documented in
+[`docs/deep-regression-review.md`](docs/deep-regression-review.md). That page
+explains the default-off GitNexus flags, advisory graph boundary, cache
+behavior, context-window telemetry, and proof checklist before default
+enablement.
+
 If you prefer API-key auth, keep the key out of the repository and shell
 history. For POSIX shells:
 

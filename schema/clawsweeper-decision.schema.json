@@ -37,6 +37,7 @@
     "agentsPolicyStatus",
     "reviewFindings",
     "securityReview",
+    "deepRegressionReview",
     "realBehaviorProof",
     "prRating",
     "telegramVisibleProof",
@@ -676,6 +677,103 @@
               }
             }
           }
+        }
+      }
+    },
+    "deepRegressionReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Independent deep-regression and architecture-fit review. For high-risk OpenClaw PRs, assess whether the branch solves the right problem without stacking code on a broken path, breaking core/runtime/auth/session/security/provider/release behavior, or relying on stale context.",
+      "required": [
+        "status",
+        "riskLevel",
+        "surfaceCategories",
+        "summary",
+        "graphContextUsed",
+        "graphContextFreshness",
+        "concerns",
+        "requiredMaintainerAction"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["not_applicable", "cleared", "needs_attention", "blocked"],
+          "description": "Use blocked when the PR should not merge without redesign or maintainer decision; needs_attention for non-blocking but material deep-regression risk; cleared only when the high-risk pass found no concern."
+        },
+        "riskLevel": {
+          "type": "string",
+          "enum": ["standard", "high", "critical"]
+        },
+        "surfaceCategories": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "core",
+              "auth",
+              "session_state",
+              "runtime",
+              "security_boundary",
+              "provider_routing",
+              "migration",
+              "release_automation",
+              "config_defaults",
+              "generated_or_build_artifact",
+              "tests_only",
+              "docs_only"
+            ]
+          }
+        },
+        "summary": {
+          "type": "string",
+          "description": "One concise sentence explaining the deep-regression verdict and proof boundary."
+        },
+        "graphContextUsed": {
+          "type": "boolean",
+          "description": "True only when a fresh or intentionally included GitNexus packet materially informed this review."
+        },
+        "graphContextFreshness": {
+          "type": "string",
+          "enum": ["fresh", "stale", "missing", "unknown", "not_applicable"],
+          "description": "Freshness of the graph packet available to this review. Do not call stale or missing graph context fresh."
+        },
+        "concerns": {
+          "type": "array",
+          "description": "Concrete architecture-fit or deep-regression concerns. Empty when cleared or not applicable.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["title", "body", "severity", "confidenceScore", "file", "line"],
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "body": {
+                "type": "string"
+              },
+              "severity": {
+                "type": "string",
+                "enum": ["P0", "P1", "P2", "P3"]
+              },
+              "confidenceScore": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "file": {
+                "type": ["string", "null"],
+                "description": "Repository-relative file path when tied to a file; null for PR-wide architecture concerns."
+              },
+              "line": {
+                "type": ["integer", "null"],
+                "minimum": 1
+              }
+            }
+          }
+        },
+        "requiredMaintainerAction": {
+          "type": "string",
+          "description": "Exact maintainer action needed for blocked/needs_attention, or an empty string when cleared/not_applicable."
         }
       }
     },

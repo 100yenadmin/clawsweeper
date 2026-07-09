@@ -137,6 +137,16 @@ export function closeDecision(overrides = {}) {
       summary: "No patch security review is needed for this issue cleanup decision.",
       concerns: [],
     },
+    deepRegressionReview: {
+      status: "not_applicable",
+      riskLevel: "standard",
+      surfaceCategories: [],
+      summary: "Deep regression review is not applicable to this non-PR issue triage.",
+      graphContextUsed: false,
+      graphContextFreshness: "not_applicable",
+      concerns: [],
+      requiredMaintainerAction: "",
+    },
     realBehaviorProof: {
       status: "not_applicable",
       summary: "Real behavior proof is not required for non-PR issue triage.",

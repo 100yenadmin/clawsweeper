@@ -105,6 +105,16 @@ test("unconfirmed product direction proposals require a clean external feature P
       summary: "No security-sensitive behavior is involved.",
       concerns: [],
     },
+    deepRegressionReview: {
+      status: "cleared",
+      riskLevel: "standard",
+      surfaceCategories: [],
+      summary: "No deep regression risk was found for this feature PR.",
+      graphContextUsed: false,
+      graphContextFreshness: "not_applicable",
+      concerns: [],
+      requiredMaintainerAction: "",
+    },
     realBehaviorProof: {
       status: "sufficient",
       summary: "A real terminal transcript demonstrates the added behavior.",

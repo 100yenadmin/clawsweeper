@@ -5,6 +5,7 @@ import {
   mergeCommandProgressSection,
   parseOptions,
   selectCommandStatusComment,
+  staleCommandStatusCommentsForPrune,
 } from "../../dist/repair/update-command-status.js";
 
 function withEnv(values: Record<string, string | undefined>, run: () => void) {
@@ -261,6 +262,52 @@ test("selectCommandStatusComment skips stale exact status-bearing ack comments",
   );
 
   assert.equal(selected?.id, 4466202000);
+});
+
+test("stale re-review status comments for older heads are pruned", () => {
+  const oldMarker = "<!-- clawsweeper-command-status:440:re_review:oldhead -->";
+  const newMarker = "<!-- clawsweeper-command-status:440:re_review:newhead -->";
+  const automergeMarker = "<!-- clawsweeper-command-status:440:automerge:oldhead -->";
+  const options = parseOptions(["--marker", newMarker, "--status-comment-id", "4922325941"]);
+  const comments = [
+    {
+      id: 4921996591,
+      user: { login: "clawsweeper[bot]" },
+      body: "Codex review\n<!-- clawsweeper-review item=440 -->",
+    },
+    {
+      id: 4922058803,
+      user: { login: "clawsweeper[bot]" },
+      body: [oldMarker, "<!-- clawsweeper-command-ack:4922058478 -->"].join("\n"),
+    },
+    {
+      id: 4922222222,
+      user: { login: "clawsweeper[bot]" },
+      body: [automergeMarker, "<!-- clawsweeper-command-ack:4922222000 -->"].join("\n"),
+    },
+    {
+      id: 4922325941,
+      user: { login: "clawsweeper[bot]" },
+      body: [newMarker, "<!-- clawsweeper-command-ack:4922325355 -->"].join("\n"),
+    },
+  ];
+
+  const selected = selectCommandStatusComment(comments, {
+    marker: options.marker,
+    statusCommentId: options.statusCommentId,
+    trustedBots: options.trustedBots,
+  });
+  assert.equal(selected?.id, 4922325941);
+
+  const prunable = staleCommandStatusCommentsForPrune(comments, selected, {
+    marker: options.marker,
+    trustedBots: options.trustedBots,
+  });
+
+  assert.deepEqual(
+    prunable.map((comment) => comment.id),
+    [4922058803],
+  );
 });
 
 test("selectCommandStatusComment matches full fast ack markers", () => {
