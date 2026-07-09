@@ -15,11 +15,11 @@ with less repeated discovery work. A fresh GitNexus packet can help ClawSweeper
 spend fewer model tokens searching for related code and more effort judging
 whether the PR is actually safe.
 
-PR #440 proposes the default-off hook for using GitNexus as advisory context.
-This document explains why maintainers might enable that hook, how to operate
-it, and what must be measured before making cost-saving claims. If PR #440 has
-not merged yet, treat this page as the adoption proposal for the hook rather
-than current `main` behavior.
+https://github.com/openclaw/clawsweeper/pull/440 proposes the default-off hook
+for using GitNexus as advisory context. This document explains why maintainers
+might enable that hook, how to operate it, and what must be measured before
+making cost-saving claims. If that PR has not merged yet, treat this page as the
+adoption proposal for the hook rather than current `main` behavior.
 
 ## The Hypothesis
 
