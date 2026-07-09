@@ -638,6 +638,12 @@ Read the report at `artifacts/local-review-<number>/<number>.md`. Key fields are
 intentionally want to move reports into durable state or sync GitHub comments.
 Add `--verbose` when you need the underlying `[review]` diagnostic logs.
 
+For the optional GitNexus code-map adoption case, see
+[`docs/gitnexus-adoption.md`](docs/gitnexus-adoption.md). That page explains
+the maintainer-facing value story, Voyage AI setup notes, benchmark proof
+boundary, and post-merge index-refresh design. Benchmark measurement is covered
+in [`docs/gitnexus-benchmarks.md`](docs/gitnexus-benchmarks.md).
+
 If you prefer API-key auth, keep the key out of the repository and shell
 history. For POSIX shells:
 
