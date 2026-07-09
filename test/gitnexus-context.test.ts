@@ -151,6 +151,58 @@ test("GitNexus context packet fails closed on secret-like query output", () => {
   );
 });
 
+test("GitNexus context packet fails closed on common credential shapes", () => {
+  const join = (...parts: string[]) => parts.join("");
+  const secretOutputs = [
+    "-----BEGIN OPENSSH PRIVATE KEY-----\nabc123\n-----END OPENSSH PRIVATE KEY-----",
+    "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE",
+    "temporary AWS key ASIAIOSFODNN7EXAMPLE",
+    [
+      "jwt",
+      "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+      "eyJzdWIiOiIxMjM0NTY3ODkwIn0",
+      "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+    ].join("."),
+    "Authorization: Bearer abcdefghijklmnopqrstuvwxyz1234567890",
+    "google key AIzaSyA1234567890abcdefghijklmnopqrstuv",
+    join("stripe key sk", "_live_", "abcdefghijklmnopqrstuvwxyz", "123456"),
+    join("slack token xo", "xb-", "123456789012-", "123456789012-", "abcdefghijklmnopqrstuvwx"),
+    join("npm token npm", "_abcdefghijklmnopqrstuvwxyz", "123456"),
+    "private_key=abcdef1234567890",
+  ];
+
+  for (const output of secretOutputs) {
+    assert.throws(
+      () =>
+        buildGitNexusContextPacket({
+          enabled: true,
+          repo: "openclaw/openclaw",
+          repoPath: "/repo/openclaw",
+          pullRequestNumber: 42,
+          headSha: "abc1234567890",
+          changedFiles: [{ path: "src/runtime/auth.ts" }],
+          repoAliases: { "openclaw/openclaw": "openclaw" },
+          runner: runnerFor({
+            "git rev-parse HEAD": { status: 0, stdout: "abc1234567890\n", stderr: "" },
+            "gitnexus list": {
+              status: 0,
+              stdout: ["  openclaw", "    Path:    /repo/openclaw", "    Commit:  abc1234"].join(
+                "\n",
+              ),
+              stderr: "",
+            },
+            "gitnexus query src/runtime/auth.ts --repo openclaw --limit 3 --max-tokens 800": {
+              status: 0,
+              stdout: output,
+              stderr: "",
+            },
+          }),
+        }),
+      /secret-like GitNexus output/i,
+    );
+  }
+});
+
 test("GitNexus context packet omits raw list failure output from prompt fields", () => {
   const packet = buildGitNexusContextPacket({
     enabled: true,

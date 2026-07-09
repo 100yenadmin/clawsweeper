@@ -415,11 +415,24 @@ function isGeneratedPath(file: string): boolean {
 }
 
 function containsSecretLikeText(text: string): boolean {
-  return (
-    /(?:api[_-]?key|secret|token|authorization)\s*[:=]\s*['"]?[A-Za-z0-9_./+=-]{16,}/i.test(text) ||
-    /\b(?:sk|ghp|gho|github_pat)_[A-Za-z0-9_]{16,}/.test(text)
-  );
+  return SECRET_LIKE_PATTERNS.some((pattern) => pattern.test(text));
 }
+
+const SECRET_LIKE_PATTERNS: readonly RegExp[] = [
+  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/,
+  /\bAKIA[0-9A-Z]{16}\b/,
+  /\bASIA[0-9A-Z]{16}\b/,
+  /\bAIza[0-9A-Za-z_-]{35}\b/,
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/,
+  /\bBearer\s+[A-Za-z0-9._~+/=-]{20,}\b/i,
+  /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/,
+  /\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{20,}\b/,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/,
+  /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/,
+  /\bxox[baprs]-[A-Za-z0-9-]{20,}\b/,
+  /\bnpm_[A-Za-z0-9]{20,}\b/,
+  /(?:api[_-]?key|access[_-]?token|authorization|client[_-]?secret|credential|id[_-]?token|passwd|password|private[_-]?key|refresh[_-]?token|secret|token)\s*[:=]\s*['"]?[A-Za-z0-9_./+=:-]{12,}/i,
+];
 
 function truncateText(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
