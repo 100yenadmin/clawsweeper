@@ -226,9 +226,17 @@ export function buildGitNexusContextPacket(
       continue;
     }
     if (containsSecretLikeText(output)) {
-      throw new Error(
-        `Secret-like GitNexus output detected for ${file.path}; refusing to add graph context.`,
-      );
+      const degradedReason = `Secret-like GitNexus output detected for ${file.path}; graph context omitted.`;
+      packet.relatedContext = [];
+      packet.omittedContext.push(`${file.path}: ${degradedReason}`);
+      return finalizePacket({
+        ...packet,
+        gitnexus: {
+          ...packet.gitnexus,
+          freshness: "unknown",
+          degradedReason,
+        },
+      });
     }
     packet.relatedContext.push({ query: file.path, output });
   }
@@ -372,13 +380,11 @@ function commandFailureDetail(command: string, result: GitNexusCommandResult): s
   const stdout = String(result.stdout ?? "").trim();
   const error = result.error?.message ?? "";
   const output = [stderr, stdout, error].filter(Boolean).join("\n");
-  if (containsSecretLikeText(output)) {
-    throw new Error(
-      `Secret-like GitNexus failure output detected for ${command}; refusing to add graph context.`,
-    );
-  }
   const status = result.status === null ? "unknown" : String(result.status);
   if (!output) return `${command} failed (status ${status}); no output.`;
+  if (containsSecretLikeText(output)) {
+    return `${command} failed (status ${status}); secret-like command output omitted sha256=${sha256(output).slice(0, 16)}.`;
+  }
   return `${command} failed (status ${status}); command output omitted sha256=${sha256(output).slice(0, 16)}.`;
 }
 

@@ -120,35 +120,37 @@ test("GitNexus context packet degrades when the index is stale and stale context
   assert.match(packet.gitnexus.degradedReason ?? "", /stale/i);
 });
 
-test("GitNexus context packet fails closed on secret-like query output", () => {
-  assert.throws(
-    () =>
-      buildGitNexusContextPacket({
-        enabled: true,
-        repo: "openclaw/openclaw",
-        repoPath: "/repo/openclaw",
-        pullRequestNumber: 42,
-        headSha: "abc1234567890",
-        changedFiles: [{ path: "src/runtime/auth.ts" }],
-        repoAliases: { "openclaw/openclaw": "openclaw" },
-        runner: runnerFor({
-          "git rev-parse HEAD": { status: 0, stdout: "abc1234567890\n", stderr: "" },
-          "gitnexus list": {
-            status: 0,
-            stdout: ["  openclaw", "    Path:    /repo/openclaw", "    Commit:  abc1234"].join(
-              "\n",
-            ),
-            stderr: "",
-          },
-          "gitnexus query src/runtime/auth.ts --repo openclaw --limit 3 --max-tokens 800": {
-            status: 0,
-            stdout: "OPENAI_API_KEY=sk-1234567890abcdef1234567890abcdef",
-            stderr: "",
-          },
-        }),
-      }),
-    /secret-like GitNexus output/i,
-  );
+test("GitNexus context packet degrades on secret-like query output", () => {
+  const secretOutput = "OPENAI_API_KEY=sk-1234567890abcdef1234567890abcdef";
+  const packet = buildGitNexusContextPacket({
+    enabled: true,
+    repo: "openclaw/openclaw",
+    repoPath: "/repo/openclaw",
+    pullRequestNumber: 42,
+    headSha: "abc1234567890",
+    changedFiles: [{ path: "src/runtime/auth.ts" }],
+    repoAliases: { "openclaw/openclaw": "openclaw" },
+    runner: runnerFor({
+      "git rev-parse HEAD": { status: 0, stdout: "abc1234567890\n", stderr: "" },
+      "gitnexus list": {
+        status: 0,
+        stdout: ["  openclaw", "    Path:    /repo/openclaw", "    Commit:  abc1234"].join("\n"),
+        stderr: "",
+      },
+      "gitnexus query src/runtime/auth.ts --repo openclaw --limit 3 --max-tokens 800": {
+        status: 0,
+        stdout: secretOutput,
+        stderr: "",
+      },
+    }),
+  });
+  const rendered = renderGitNexusContextPacketForPrompt(packet);
+
+  assert.equal(packet.gitnexus.freshness, "unknown");
+  assert.equal(packet.relatedContext.length, 0);
+  assert.match(packet.gitnexus.degradedReason ?? "", /secret-like GitNexus output/i);
+  assert.match(packet.omittedContext.join("\n"), /graph context omitted/i);
+  assert.equal(rendered.includes(secretOutput), false);
 });
 
 test("GitNexus context packet fails closed on common credential shapes", () => {
@@ -172,34 +174,34 @@ test("GitNexus context packet fails closed on common credential shapes", () => {
   ];
 
   for (const output of secretOutputs) {
-    assert.throws(
-      () =>
-        buildGitNexusContextPacket({
-          enabled: true,
-          repo: "openclaw/openclaw",
-          repoPath: "/repo/openclaw",
-          pullRequestNumber: 42,
-          headSha: "abc1234567890",
-          changedFiles: [{ path: "src/runtime/auth.ts" }],
-          repoAliases: { "openclaw/openclaw": "openclaw" },
-          runner: runnerFor({
-            "git rev-parse HEAD": { status: 0, stdout: "abc1234567890\n", stderr: "" },
-            "gitnexus list": {
-              status: 0,
-              stdout: ["  openclaw", "    Path:    /repo/openclaw", "    Commit:  abc1234"].join(
-                "\n",
-              ),
-              stderr: "",
-            },
-            "gitnexus query src/runtime/auth.ts --repo openclaw --limit 3 --max-tokens 800": {
-              status: 0,
-              stdout: output,
-              stderr: "",
-            },
-          }),
-        }),
-      /secret-like GitNexus output/i,
-    );
+    const packet = buildGitNexusContextPacket({
+      enabled: true,
+      repo: "openclaw/openclaw",
+      repoPath: "/repo/openclaw",
+      pullRequestNumber: 42,
+      headSha: "abc1234567890",
+      changedFiles: [{ path: "src/runtime/auth.ts" }],
+      repoAliases: { "openclaw/openclaw": "openclaw" },
+      runner: runnerFor({
+        "git rev-parse HEAD": { status: 0, stdout: "abc1234567890\n", stderr: "" },
+        "gitnexus list": {
+          status: 0,
+          stdout: ["  openclaw", "    Path:    /repo/openclaw", "    Commit:  abc1234"].join("\n"),
+          stderr: "",
+        },
+        "gitnexus query src/runtime/auth.ts --repo openclaw --limit 3 --max-tokens 800": {
+          status: 0,
+          stdout: output,
+          stderr: "",
+        },
+      }),
+    });
+    const rendered = renderGitNexusContextPacketForPrompt(packet);
+
+    assert.equal(packet.gitnexus.freshness, "unknown");
+    assert.equal(packet.relatedContext.length, 0);
+    assert.match(packet.gitnexus.degradedReason ?? "", /secret-like GitNexus output/i);
+    assert.equal(rendered.includes(output), false);
   }
 });
 
@@ -260,33 +262,33 @@ test("GitNexus context packet omits raw query failure output from prompt fields"
   assert.doesNotMatch(rendered, /raw query stderr should not be prompted/);
 });
 
-test("GitNexus context packet fails closed on secret-like failure output", () => {
-  assert.throws(
-    () =>
-      buildGitNexusContextPacket({
-        enabled: true,
-        repo: "openclaw/openclaw",
-        repoPath: "/repo/openclaw",
-        pullRequestNumber: 42,
-        headSha: "abc1234567890",
-        changedFiles: [{ path: "src/runtime/auth.ts" }],
-        repoAliases: { "openclaw/openclaw": "openclaw" },
-        runner: runnerFor({
-          "git rev-parse HEAD": { status: 0, stdout: "abc1234567890\n", stderr: "" },
-          "gitnexus list": {
-            status: 0,
-            stdout: ["  openclaw", "    Path:    /repo/openclaw", "    Commit:  abc1234"].join(
-              "\n",
-            ),
-            stderr: "",
-          },
-          "gitnexus query src/runtime/auth.ts --repo openclaw --limit 3 --max-tokens 800": {
-            status: 1,
-            stdout: "",
-            stderr: "GITHUB_TOKEN=ghp_abcdefghijklmnop",
-          },
-        }),
-      }),
-    /secret-like GitNexus failure output/i,
-  );
+test("GitNexus context packet degrades on secret-like failure output", () => {
+  const secretOutput = "GITHUB_TOKEN=ghp_abcdefghijklmnop";
+  const packet = buildGitNexusContextPacket({
+    enabled: true,
+    repo: "openclaw/openclaw",
+    repoPath: "/repo/openclaw",
+    pullRequestNumber: 42,
+    headSha: "abc1234567890",
+    changedFiles: [{ path: "src/runtime/auth.ts" }],
+    repoAliases: { "openclaw/openclaw": "openclaw" },
+    runner: runnerFor({
+      "git rev-parse HEAD": { status: 0, stdout: "abc1234567890\n", stderr: "" },
+      "gitnexus list": {
+        status: 0,
+        stdout: ["  openclaw", "    Path:    /repo/openclaw", "    Commit:  abc1234"].join("\n"),
+        stderr: "",
+      },
+      "gitnexus query src/runtime/auth.ts --repo openclaw --limit 3 --max-tokens 800": {
+        status: 1,
+        stdout: "",
+        stderr: secretOutput,
+      },
+    }),
+  });
+  const rendered = renderGitNexusContextPacketForPrompt(packet);
+
+  assert.equal(packet.relatedContext.length, 0);
+  assert.match(packet.omittedContext.join("\n"), /secret-like command output omitted sha256=/);
+  assert.equal(rendered.includes(secretOutput), false);
 });
