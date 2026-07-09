@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import test from "node:test";
 
 test("GitNexus adoption benchmark emits normalized savings metrics", () => {
@@ -41,4 +41,38 @@ test("GitNexus adoption benchmark emits normalized savings metrics", () => {
   assert.equal(result.falsePositiveCount, 0);
   assert.equal(result.graphFreshness, "fresh");
   assert.equal(result.secretLeakageDetected, false);
+});
+
+test("GitNexus adoption benchmark rejects impossible seeded finding counts", () => {
+  const result = spawnSync(
+    process.execPath,
+    [
+      "scripts/gitnexus-adoption-benchmark.mjs",
+      "--seeded-findings-caught",
+      "4",
+      "--seeded-findings-total",
+      "3",
+    ],
+    { encoding: "utf8" },
+  );
+
+  assert.notEqual(result.status, 0);
+  assert.match(
+    `${result.stderr}${result.stdout}`,
+    /--seeded-findings-caught cannot exceed --seeded-findings-total/,
+  );
+});
+
+test("GitNexus adoption benchmark rejects fractional count metrics", () => {
+  const result = spawnSync(
+    process.execPath,
+    ["scripts/gitnexus-adoption-benchmark.mjs", "--baseline-tool-calls", "1.5"],
+    { encoding: "utf8" },
+  );
+
+  assert.notEqual(result.status, 0);
+  assert.match(
+    `${result.stderr}${result.stdout}`,
+    /--baseline-tool-calls must be a non-negative integer/,
+  );
 });

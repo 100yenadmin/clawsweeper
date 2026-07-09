@@ -3,15 +3,22 @@
 const evalName = "clawsweeper-gitnexus-adoption-v0.1";
 const allowedFreshness = new Set(["fresh", "stale", "missing", "unknown", "not_applicable"]);
 
-const args = parseArgs(process.argv.slice(2));
+try {
+  const args = parseArgs(process.argv.slice(2));
 
-if (args.help) {
-  printHelp();
-  process.exit(0);
+  if (args.help) {
+    printHelp();
+    process.exit(0);
+  }
+
+  const result = buildResult(args);
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  process.stderr.write(`Error: ${message}\n`);
+  process.stderr.write("Run with --help for usage.\n");
+  process.exit(1);
 }
-
-const result = buildResult(args);
-process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 
 function parseArgs(argv) {
   const parsed = {
@@ -45,31 +52,31 @@ function parseArgs(argv) {
         parsed.scenario = value;
         break;
       case "--baseline-tokens":
-        parsed.baselineTokens = numberValue(name, value);
+        parsed.baselineTokens = integerValue(name, value);
         break;
       case "--gitnexus-tokens":
-        parsed.gitnexusTokens = numberValue(name, value);
+        parsed.gitnexusTokens = integerValue(name, value);
         break;
       case "--baseline-runtime-ms":
-        parsed.baselineRuntimeMs = numberValue(name, value);
+        parsed.baselineRuntimeMs = integerValue(name, value);
         break;
       case "--gitnexus-runtime-ms":
-        parsed.gitnexusRuntimeMs = numberValue(name, value);
+        parsed.gitnexusRuntimeMs = integerValue(name, value);
         break;
       case "--baseline-tool-calls":
-        parsed.baselineToolCalls = numberValue(name, value);
+        parsed.baselineToolCalls = integerValue(name, value);
         break;
       case "--gitnexus-tool-calls":
-        parsed.gitnexusToolCalls = numberValue(name, value);
+        parsed.gitnexusToolCalls = integerValue(name, value);
         break;
       case "--seeded-findings-caught":
-        parsed.seededFindingsCaught = numberValue(name, value);
+        parsed.seededFindingsCaught = integerValue(name, value);
         break;
       case "--seeded-findings-total":
-        parsed.seededFindingsTotal = numberValue(name, value);
+        parsed.seededFindingsTotal = integerValue(name, value);
         break;
       case "--false-positive-count":
-        parsed.falsePositiveCount = numberValue(name, value);
+        parsed.falsePositiveCount = integerValue(name, value);
         break;
       case "--graph-freshness":
         if (!allowedFreshness.has(value)) {
@@ -91,6 +98,8 @@ function parseArgs(argv) {
 }
 
 function buildResult(values) {
+  validateMetrics(values);
+
   return {
     evalName,
     scenario: values.scenario,
@@ -111,15 +120,21 @@ function buildResult(values) {
   };
 }
 
+function validateMetrics(values) {
+  if (values.seededFindingsCaught > values.seededFindingsTotal) {
+    throw new Error("--seeded-findings-caught cannot exceed --seeded-findings-total");
+  }
+}
+
 function reductionPercent(baseline, candidate) {
   if (baseline <= 0) return 0;
   return Number((((baseline - candidate) / baseline) * 100).toFixed(2));
 }
 
-function numberValue(name, value) {
+function integerValue(name, value) {
   const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    throw new Error(`${name} must be a non-negative number`);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`${name} must be a non-negative integer`);
   }
   return parsed;
 }
@@ -135,15 +150,15 @@ function printHelp() {
 
 Options:
   --scenario <name>
-  --baseline-tokens <number>
-  --gitnexus-tokens <number>
-  --baseline-runtime-ms <number>
-  --gitnexus-runtime-ms <number>
-  --baseline-tool-calls <number>
-  --gitnexus-tool-calls <number>
-  --seeded-findings-caught <number>
-  --seeded-findings-total <number>
-  --false-positive-count <number>
+  --baseline-tokens <integer>
+  --gitnexus-tokens <integer>
+  --baseline-runtime-ms <integer>
+  --gitnexus-runtime-ms <integer>
+  --baseline-tool-calls <integer>
+  --gitnexus-tool-calls <integer>
+  --seeded-findings-caught <integer>
+  --seeded-findings-total <integer>
+  --false-positive-count <integer>
   --graph-freshness <fresh|stale|missing|unknown|not_applicable>
   --secret-leakage-detected <true|false>
 `);

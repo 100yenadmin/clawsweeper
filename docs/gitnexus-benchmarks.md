@@ -96,11 +96,18 @@ after a baseline and GitNexus-enabled review have already been collected.
 
 ## Evidence Packet
 
-Store benchmark artifacts under:
+Store benchmark artifacts in a portable location chosen by the runner or
+operator. Good options:
 
 ```text
-/Volumes/LEXAR/Codex/evidence/clawsweeper-gitnexus-adoption/2026-07-09/<issue-or-pr>/
+artifacts/gitnexus-adoption/<run-id>/
+$CLAWSWEEPER_EVIDENCE_DIR/gitnexus-adoption/<run-id>/
+GitHub Actions artifact: gitnexus-adoption-<run-id>
 ```
+
+Do not hard-code contributor-local disk paths in published benchmark docs or PR
+evidence. Local operators can still keep their own scratch packets wherever
+their environment policy requires.
 
 Recommended files:
 
@@ -126,4 +133,3 @@ Not acceptable:
 - "GitNexus proves the PR is safe."
 - "GitNexus replaces maintainer review."
 - "GitNexus saw the whole repo" unless the evidence proves that exact claim.
-
