@@ -154,8 +154,8 @@ interface ReleasePolicyFile {
   repositories: Record<
     string,
     {
-      release_preparation: { exact_paths: string[]; prefixes: string[] };
-      release_infrastructure: { exact_paths: string[]; prefixes: string[] };
+      release_preparation: { exact_paths: string[]; prefixes: string[]; patterns?: string[] };
+      release_infrastructure: { exact_paths: string[]; prefixes: string[]; patterns?: string[] };
       product_path_prefixes?: string[];
     }
   >;
@@ -300,7 +300,12 @@ function collectChange(
   if (pull && !parsedMetadata.value) collectionComplete = false;
   const proof =
     parsedMetadata.value?.releaseClass === "exact-backport"
-      ? exactBackportProof(options.targetCheckout, parsedMetadata.value.sourceSha, sha)
+      ? exactBackportProof(
+          options.repo,
+          options.targetCheckout,
+          parsedMetadata.value.sourceSha,
+          sha,
+        )
       : {};
 
   return {
@@ -349,7 +354,7 @@ function collectCommit(
 
 function associatedPulls(repo: string, sha: string): { pulls: GitHubPull[]; complete: boolean } {
   const [owner, name] = repo.split("/", 2);
-  const query = `query($owner:String!,$name:String!,$sha:GitObjectID!){repository(owner:$owner,name:$name){object(oid:$sha){... on Commit{associatedPullRequests(first:100,states:[OPEN,MERGED]){nodes{number url body baseRefName}pageInfo{hasNextPage}}}}}}`;
+  const query = `query($owner:String!,$name:String!,$sha:GitObjectID!){repository(owner:$owner,name:$name){object(oid:$sha){... on Commit{associatedPullRequests(first:100){nodes{number url body baseRefName}pageInfo{hasNextPage}}}}}}`;
   const args = [
     "api",
     "graphql",
@@ -380,32 +385,72 @@ function associatedPulls(repo: string, sha: string): { pulls: GitHubPull[]; comp
   return { pulls, complete: true };
 }
 
-function exactBackportProof(
+export function exactBackportProof(
+  repo: string,
   checkout: string | undefined,
   sourceSha: string | undefined,
   releaseSha: string,
 ): Pick<ReleaseReportChangeInput, "sourceMainReachable" | "patchEquivalent"> {
   if (!checkout || !sourceSha) return {};
+  const githubMainSha = fullSha(
+    tryGhJson<GitHubRef>(`repos/${repo}/git/ref/heads/main`).value?.object?.sha,
+  );
+  if (!githubMainSha) return {};
+  return verifyExactBackport(checkout, sourceSha, releaseSha, githubMainSha);
+}
+
+export function verifyExactBackport(
+  checkout: string,
+  sourceSha: string,
+  releaseSha: string,
+  githubMainSha: string,
+): Pick<ReleaseReportChangeInput, "sourceMainReachable" | "patchEquivalent"> {
   try {
-    runText("git", ["rev-parse", "--is-inside-work-tree"], { cwd: checkout, trim: "both" });
-    runText("git", ["rev-parse", "--verify", "main^{commit}"], { cwd: checkout, trim: "both" });
-    runText("git", ["rev-parse", "--verify", `${sourceSha}^{commit}`], {
+    const insideWorktree = runText("git", ["rev-parse", "--is-inside-work-tree"], {
       cwd: checkout,
       trim: "both",
     });
-    runText("git", ["rev-parse", "--verify", `${releaseSha}^{commit}`], {
+    const shallow = runText("git", ["rev-parse", "--is-shallow-repository"], {
       cwd: checkout,
       trim: "both",
     });
+    const localMainSha = fullSha(
+      runText("git", ["rev-parse", "--verify", "refs/remotes/origin/main^{commit}"], {
+        cwd: checkout,
+        trim: "both",
+      }),
+    );
+    const localSourceSha = fullSha(
+      runText("git", ["rev-parse", "--verify", `${sourceSha}^{commit}`], {
+        cwd: checkout,
+        trim: "both",
+      }),
+    );
+    const localReleaseSha = fullSha(
+      runText("git", ["rev-parse", "--verify", `${releaseSha}^{commit}`], {
+        cwd: checkout,
+        trim: "both",
+      }),
+    );
+    if (
+      insideWorktree !== "true" ||
+      shallow !== "false" ||
+      localMainSha !== githubMainSha ||
+      localSourceSha !== sourceSha ||
+      localReleaseSha !== releaseSha
+    ) {
+      return {};
+    }
   } catch {
     return {};
   }
-  const sourceMainReachable = gitExitZero(checkout, [
+  const sourceMainReachable = gitAncestorResult(checkout, [
     "merge-base",
     "--is-ancestor",
     sourceSha,
-    "main",
+    "refs/remotes/origin/main",
   ]);
+  if (sourceMainReachable === undefined) return {};
   const sourcePatchId = gitPatchId(checkout, sourceSha);
   const releasePatchId = gitPatchId(checkout, releaseSha);
   return {
@@ -416,9 +461,17 @@ function exactBackportProof(
   };
 }
 
-function gitExitZero(cwd: string, args: string[]): boolean {
-  const command = resolveCommand("git", args);
-  return spawnSync(command.command, command.args, { cwd, stdio: "ignore" }).status === 0;
+function gitAncestorResult(cwd: string, args: string[]): boolean | undefined {
+  try {
+    const command = resolveCommand("git", args);
+    const result = spawnSync(command.command, command.args, { cwd, stdio: "ignore" });
+    if (result.error || result.signal) return undefined;
+    if (result.status === 0) return true;
+    if (result.status === 1) return false;
+    return undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function gitPatchId(cwd: string, sha: string): string | undefined {
@@ -465,6 +518,14 @@ function releasePolicyFor(repo: string): ReleaseRepositoryPolicy {
         "release_preparation.exact_paths",
       ),
       prefixes: stringArray(policy.release_preparation.prefixes, "release_preparation.prefixes"),
+      ...(policy.release_preparation.patterns
+        ? {
+            patterns: stringArray(
+              policy.release_preparation.patterns,
+              "release_preparation.patterns",
+            ),
+          }
+        : {}),
     },
     releaseInfrastructure: {
       exactPaths: stringArray(
@@ -475,6 +536,14 @@ function releasePolicyFor(repo: string): ReleaseRepositoryPolicy {
         policy.release_infrastructure.prefixes,
         "release_infrastructure.prefixes",
       ),
+      ...(policy.release_infrastructure.patterns
+        ? {
+            patterns: stringArray(
+              policy.release_infrastructure.patterns,
+              "release_infrastructure.patterns",
+            ),
+          }
+        : {}),
     },
     ...(policy.product_path_prefixes
       ? {

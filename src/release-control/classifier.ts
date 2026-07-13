@@ -3,6 +3,7 @@ import type { ReleaseContract, ReleasePullMetadata } from "./contract.js";
 export interface ReleasePathPolicy {
   exactPaths: readonly string[];
   prefixes: readonly string[];
+  patterns?: readonly string[];
 }
 
 export interface ReleaseRepositoryPolicy {
@@ -120,9 +121,13 @@ function classifyException(
   metadata: ReleasePullMetadata,
   signals: string[],
 ): ReleaseChangeDecision {
-  const exception = input.contract.approvedExceptions.find(
+  const matchingExceptions = input.contract.approvedExceptions.filter(
     (candidate) => candidate.number === input.prNumber,
   );
+  if (matchingExceptions.length > 1) {
+    return decision("incomplete", "release contract contains duplicate exception entries", signals);
+  }
+  const exception = matchingExceptions[0];
   if (!exception) {
     return decision("blocked", "pull request is not listed under Approved exceptions", signals);
   }
@@ -164,8 +169,18 @@ function pathsMatch(paths: readonly string[], policy: ReleasePathPolicy): boolea
     paths.every(
       (path) =>
         policy.exactPaths.includes(path) ||
-        policy.prefixes.some((prefix) => path.startsWith(prefix)),
+        policy.prefixes.some((prefix) => path.startsWith(prefix)) ||
+        (policy.patterns ?? []).some((pattern) => pathMatchesPattern(path, pattern)),
     )
+  );
+}
+
+function pathMatchesPattern(path: string, pattern: string): boolean {
+  const pathSegments = path.split("/");
+  const patternSegments = pattern.split("/");
+  return (
+    pathSegments.length === patternSegments.length &&
+    patternSegments.every((segment, index) => segment === "*" || segment === pathSegments[index])
   );
 }
 

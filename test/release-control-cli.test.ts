@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -106,14 +106,14 @@ None.
 `;
   const prBody = `
 Release train: #900
-Release class: release-infrastructure
+Release class: release-preparation
 Blocker: not applicable
 Source on main: not applicable
 Exception decision: not required
 `;
   const firstPagePaths = Array.from(
     { length: 100 },
-    (_, index) => `.github/workflows/release-${String(index).padStart(3, "0")}.yml`,
+    (_, index) => `extensions/fixture-${String(index).padStart(3, "0")}/package.json`,
   );
   const responses = {
     "repos/openclaw/openclaw/issues/900": {
@@ -165,7 +165,7 @@ Exception decision: not required
     },
     [`repos/openclaw/openclaw/commits/${headSha}?per_page=100&page=2`]: {
       sha: headSha,
-      files: [{ filename: "scripts/release-followup.mjs" }],
+      files: [{ filename: "npm-shrinkwrap.json" }],
     },
   };
 
@@ -177,6 +177,15 @@ const args = process.argv.slice(2);
 appendFileSync(process.env.GH_LOG, JSON.stringify(args) + "\\n");
 const responses = ${JSON.stringify(responses)};
 if (args[0] === "api" && args[1] === "graphql") {
+  const query = args.find((arg) => arg.startsWith("query=")) ?? "";
+  if (query.includes("associatedPullRequests(first:100,states:")) {
+    console.error("unsupported associatedPullRequests states argument");
+    process.exit(2);
+  }
+  if (!query.includes("associatedPullRequests(first:100){nodes{number url body baseRefName}pageInfo{hasNextPage}}")) {
+    console.error("unexpected associatedPullRequests query shape");
+    process.exit(2);
+  }
   process.stdout.write(JSON.stringify({ data: { repository: { object: { associatedPullRequests: {
     nodes: [{ number: 901, url: "https://github.com/openclaw/openclaw/pull/901", body: ${JSON.stringify(prBody)}, baseRefName: "release/2026.7.2" }],
     pageInfo: { hasNextPage: false }
@@ -214,7 +223,9 @@ process.stdout.write(JSON.stringify(responses[args[1]]));
     assert.equal(second.status, 0, second.stderr);
     assert.equal(readFileSync(join(output, "2026.7.2.json"), "utf8"), firstJson);
     assert.equal(readFileSync(join(output, "2026.7.2.md"), "utf8"), firstMarkdown);
-    assert.equal(JSON.parse(firstJson).status, "clear");
+    assert.deepEqual(readdirSync(output).sort(), ["2026.7.2.json", "2026.7.2.md"]);
+    assert.equal(JSON.parse(firstJson).status, "attention");
+    assert.equal(JSON.parse(firstJson).changes[0].status, "allowed");
     assert.equal(JSON.parse(firstJson).code_sha, codeSha);
     assert.equal(JSON.parse(firstJson).release_sha, releaseSha);
     assert.equal(JSON.parse(firstJson).latest_beta, "v2026.7.2-beta.1");
@@ -233,6 +244,13 @@ process.stdout.write(JSON.stringify(responses[args[1]]));
       ),
     );
     assert.ok(calls.some((args) => args[1] === "graphql"));
+    assert.ok(
+      calls.every(
+        (args) =>
+          args[1] !== "graphql" ||
+          args.some((arg) => arg.startsWith("query=query(") && !arg.includes("mutation")),
+      ),
+    );
     const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
       scripts: Record<string, string>;
     };

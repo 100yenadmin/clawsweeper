@@ -67,6 +67,7 @@ export function parseReleaseContract(body: string): ParseResult<ReleaseContract>
   const captain = loginFrom(fields.get("Release captain") ?? "");
   const cutSha = fullShaFrom(fields.get("Cut SHA") ?? "");
   const allowedChangeClasses = releaseClassesFrom(fields.get("Allowed change classes") ?? "");
+  const approvedExceptions = approvedExceptionsFrom(fields.get("Approved exceptions") ?? "");
   if (!train) addMissing(missingFields, "Release train");
   if (!captain) addMissing(missingFields, "Release captain");
   if (!fields.get("Goal")?.trim()) addMissing(missingFields, "Goal");
@@ -75,6 +76,9 @@ export function parseReleaseContract(body: string): ParseResult<ReleaseContract>
   if (allowedChangeClasses.length === 0) addMissing(missingFields, "Allowed change classes");
   if (!fields.get("Exit criteria")?.trim()) addMissing(missingFields, "Exit criteria");
   if (!fields.get("Approved exceptions")?.trim()) addMissing(missingFields, "Approved exceptions");
+  if (new Set(approvedExceptions.map((entry) => entry.number)).size !== approvedExceptions.length) {
+    addMissing(missingFields, "Approved exceptions");
+  }
   if (!captain || !cutSha || missingFields.length > 0) return { value: null, missingFields };
 
   return {
@@ -86,7 +90,7 @@ export function parseReleaseContract(body: string): ParseResult<ReleaseContract>
       cutSha,
       allowedChangeClasses,
       exitCriteria: fields.get("Exit criteria")!.trim(),
-      approvedExceptions: approvedExceptionsFrom(fields.get("Approved exceptions")!),
+      approvedExceptions,
     },
     missingFields: [],
   };

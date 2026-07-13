@@ -1,0 +1,27 @@
+{
+  "sha": "970bbc7e5b2719cdb67761deb6c65e76c3025e24",
+  "file_count": 215,
+  "path_counts": {
+    "extension_package_json": 138,
+    "extension_npm_shrinkwrap": 73,
+    "root_package_json": 1,
+    "root_npm_shrinkwrap": 1,
+    "package_package_json": 1,
+    "package_npm_shrinkwrap": 1
+  },
+  "representative_allowed_paths": [
+    "package.json",
+    "npm-shrinkwrap.json",
+    "pnpm-lock.yaml",
+    "extensions/meta-model-api/package.json",
+    "extensions/meta-model-api/npm-shrinkwrap.json",
+    "packages/ai/package.json",
+    "packages/ai/npm-shrinkwrap.json",
+    "apps/macos/Sources/OpenClaw/Resources/Info.plist"
+  ],
+  "representative_blocked_paths": [
+    "extensions/foo/src/index.ts",
+    "extensions/foo/nested/package.json",
+    "packages/ai/nested/npm-shrinkwrap.json"
+  ]
+}

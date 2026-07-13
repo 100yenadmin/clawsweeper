@@ -1,8 +1,23 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { classifyReleaseChange } from "../dist/release-control/classifier.js";
 import type { ReleaseContract, ReleasePullMetadata } from "../dist/release-control/contract.js";
+
+const releasePreparationFixture = JSON.parse(
+  readFileSync(
+    fileURLToPath(new URL("fixtures/release-preparation-2026.7.1.json", import.meta.url)),
+    "utf8",
+  ),
+) as {
+  sha: string;
+  file_count: number;
+  path_counts: Record<string, number>;
+  representative_allowed_paths: string[];
+  representative_blocked_paths: string[];
+};
 
 const contract: ReleaseContract = {
   train: "2026.7.2",
@@ -31,8 +46,14 @@ const contract: ReleaseContract = {
 
 const policy = {
   releasePreparation: {
-    exactPaths: ["package.json", "pnpm-lock.yaml"],
+    exactPaths: ["package.json", "npm-shrinkwrap.json", "pnpm-lock.yaml"],
     prefixes: ["apps/macos/Sources/OpenClaw/Resources/"],
+    patterns: [
+      "extensions/*/package.json",
+      "extensions/*/npm-shrinkwrap.json",
+      "packages/*/package.json",
+      "packages/*/npm-shrinkwrap.json",
+    ],
   },
   releaseInfrastructure: {
     exactPaths: [".agents/skills/release-openclaw-maintainer/SKILL.md"],
@@ -104,6 +125,33 @@ test("allows each declared release class only with its required deterministic pr
       ...scenario,
     });
     assert.equal(result.status, "allowed", scenario.name);
+  }
+});
+
+test("matches only the narrow 2026.7.1 release-preparation package surfaces", () => {
+  const base = {
+    sha: "d".repeat(40),
+    prNumber: 301,
+    title: "chore(release): prepare 2026.7.1 beta",
+    contractIssue: 900,
+    contract,
+    policy,
+    metadata: metadata("release-preparation"),
+  };
+  assert.equal(releasePreparationFixture.sha, "970bbc7e5b2719cdb67761deb6c65e76c3025e24");
+  assert.equal(
+    Object.values(releasePreparationFixture.path_counts).reduce((sum, count) => sum + count, 0),
+    releasePreparationFixture.file_count,
+  );
+  assert.equal(
+    classifyReleaseChange({
+      ...base,
+      paths: releasePreparationFixture.representative_allowed_paths,
+    }).status,
+    "allowed",
+  );
+  for (const path of releasePreparationFixture.representative_blocked_paths) {
+    assert.equal(classifyReleaseChange({ ...base, paths: [path] }).status, "blocked", path);
   }
 });
 
@@ -270,6 +318,33 @@ test("requires exception listing, captain approval, and a matching decision link
       metadata: metadata("exception", {
         exceptionDecisionUrl: "https://github.com/openclaw/openclaw/issues/900#issuecomment-203",
       }),
+    }).status,
+    "incomplete",
+  );
+
+  const duplicateExceptionUrl = "https://github.com/openclaw/openclaw/issues/900#issuecomment-204";
+  assert.equal(
+    classifyReleaseChange({
+      ...base,
+      prNumber: 204,
+      contract: {
+        ...contract,
+        approvedExceptions: [
+          {
+            number: 204,
+            decision: "approved" as const,
+            approver: "alice",
+            decisionUrl: duplicateExceptionUrl,
+          },
+          {
+            number: 204,
+            decision: "rejected" as const,
+            approver: "alice",
+            decisionUrl: "https://github.com/openclaw/openclaw/issues/900#issuecomment-205",
+          },
+        ],
+      },
+      metadata: metadata("exception", { exceptionDecisionUrl: duplicateExceptionUrl }),
     }).status,
     "incomplete",
   );

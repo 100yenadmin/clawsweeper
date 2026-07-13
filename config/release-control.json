@@ -3,10 +3,13 @@
   "repositories": {
     "openclaw/openclaw": {
       "release_preparation": {
-        "exact_paths": ["package.json", "pnpm-lock.yaml"],
-        "prefixes": [
-          "apps/macos/Sources/OpenClaw/Resources/",
-          "apps/macos/OpenClaw/Assets.xcassets/"
+        "exact_paths": ["package.json", "npm-shrinkwrap.json", "pnpm-lock.yaml"],
+        "prefixes": ["apps/macos/Sources/OpenClaw/Resources/"],
+        "patterns": [
+          "extensions/*/package.json",
+          "extensions/*/npm-shrinkwrap.json",
+          "packages/*/package.json",
+          "packages/*/npm-shrinkwrap.json"
         ]
       },
       "release_infrastructure": {

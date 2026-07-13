@@ -99,3 +99,28 @@ Exception decision: not required
   assert.equal(metadata.value, null);
   assert.deepEqual(metadata.missingFields, ["Release class"]);
 });
+
+test("rejects duplicate and conflicting approved-exception entries", () => {
+  const contract = parseReleaseContract(`
+## Release train
+2026.7.2
+## Release captain
+@alice
+## Goal
+Ship a narrow beta.
+## Non-goals
+No product work.
+## Cut SHA
+0123456789abcdef0123456789abcdef01234567
+## Allowed change classes
+- exception
+## Exit criteria
+Checks pass.
+## Approved exceptions
+- #991: approved by @alice (https://github.com/openclaw/openclaw/issues/900#issuecomment-1)
+- #991: rejected by @alice (https://github.com/openclaw/openclaw/issues/900#issuecomment-2)
+`);
+
+  assert.equal(contract.value, null);
+  assert.deepEqual(contract.missingFields, ["Approved exceptions"]);
+});
