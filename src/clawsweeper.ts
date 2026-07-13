@@ -54,6 +54,7 @@ import {
 } from "./github-retry.js";
 import { parseGhJson, parseGhJsonLinesWithRetry, parseGhJsonWithRetry } from "./github-json.js";
 import { stableJson } from "./stable-json.js";
+import { releaseControlAuditCommand } from "./release-control/cli.js";
 import {
   REVIEW_STRUCTURAL_CACHE_VERSION,
   reviewStructuralRecordAtLeastAsFresh,
@@ -30323,8 +30324,9 @@ export async function main(
 ): Promise<void> {
   const args = parseArgs(argv);
   const command = args._[0] ?? "review";
+  const readOnlyReleaseControlAudit = command === "release-control-audit";
   const flushActionEvents = dependencies.flushWorkflowActionEvents ?? flushWorkflowActionEvents;
-  if (!process.env.CLAWSWEEPER_ACTION_LEDGER_INVOCATION) {
+  if (!readOnlyReleaseControlAudit && !process.env.CLAWSWEEPER_ACTION_LEDGER_INVOCATION) {
     process.env.CLAWSWEEPER_ACTION_LEDGER_INVOCATION = sha256(stableJson({ command, args })).slice(
       0,
       16,
@@ -30343,6 +30345,7 @@ export async function main(
     else if (command === "proof-nudges") proofNudgesCommand(args);
     else if (command === "bot-proof") botProofCommand(args);
     else if (command === "audit") auditCommand(args);
+    else if (command === "release-control-audit") releaseControlAuditCommand(args);
     else if (command === "reconcile") reconcileCommand(args);
     else if (command === "dashboard") {
       repoFromArgs(args);
@@ -30384,31 +30387,33 @@ export async function main(
     commandFailed = true;
     commandError = error;
   }
-  try {
-    const shardPaths = await flushActionEvents(ROOT);
-    if (shardPaths.length > 0) {
-      console.error(
-        `[action-ledger] finalized ${shardPaths.length} immutable workflow shard${
-          shardPaths.length === 1 ? "" : "s"
-        }`,
-      );
-    }
-  } catch (error) {
-    if (commandFailed) {
-      console.error(
-        `[action-ledger] best-effort finalization failed after command failure: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    } else if (isExplicitActionLedgerCommand(command)) {
-      commandFailed = true;
-      commandError = error;
-    } else {
-      console.error(
-        `[action-ledger] best-effort finalization failed after successful ${command}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
+  if (!readOnlyReleaseControlAudit) {
+    try {
+      const shardPaths = await flushActionEvents(ROOT);
+      if (shardPaths.length > 0) {
+        console.error(
+          `[action-ledger] finalized ${shardPaths.length} immutable workflow shard${
+            shardPaths.length === 1 ? "" : "s"
+          }`,
+        );
+      }
+    } catch (error) {
+      if (commandFailed) {
+        console.error(
+          `[action-ledger] best-effort finalization failed after command failure: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      } else if (isExplicitActionLedgerCommand(command)) {
+        commandFailed = true;
+        commandError = error;
+      } else {
+        console.error(
+          `[action-ledger] best-effort finalization failed after successful ${command}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
     }
   }
   if (commandFailed) throw commandError;

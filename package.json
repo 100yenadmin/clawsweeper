@@ -20,6 +20,7 @@
     "proof-nudges": "node dist/clawsweeper.js proof-nudges",
     "bot-proof": "node dist/clawsweeper.js bot-proof",
     "audit": "node dist/clawsweeper.js audit",
+    "release-control:audit": "node dist/clawsweeper.js release-control-audit",
     "reconcile": "node dist/clawsweeper.js reconcile",
     "status": "node dist/clawsweeper.js status",
     "commit-review": "node dist/commit-sweeper.js",

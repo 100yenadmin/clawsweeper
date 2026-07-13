@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "repositories": {
+    "openclaw/openclaw": {
+      "release_preparation": {
+        "exact_paths": ["package.json", "pnpm-lock.yaml"],
+        "prefixes": [
+          "apps/macos/Sources/OpenClaw/Resources/",
+          "apps/macos/OpenClaw/Assets.xcassets/"
+        ]
+      },
+      "release_infrastructure": {
+        "exact_paths": [
+          ".agents/skills/release-openclaw-maintainer/SKILL.md",
+          "docs/reference/RELEASING.md"
+        ],
+        "prefixes": [
+          ".github/workflows/release-",
+          ".github/actions/release-",
+          "scripts/release",
+          "scripts/package",
+          "scripts/notarize"
+        ]
+      },
+      "product_path_prefixes": ["src/", "apps/", "packages/", "extensions/"]
+    }
+  }
+}

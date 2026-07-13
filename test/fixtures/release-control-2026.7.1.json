@@ -1,0 +1,58 @@
+{
+  "targetRepo": "openclaw/openclaw",
+  "train": "2026.7.1",
+  "releaseBranch": "release/2026.7.1",
+  "contractIssue": {
+    "number": 900,
+    "url": "https://github.com/openclaw/openclaw/issues/900",
+    "updatedAt": "2026-07-10T12:00:00Z",
+    "bodyDigest": "sha256:contract"
+  },
+  "contract": {
+    "train": "2026.7.1",
+    "captain": "alice",
+    "goal": "Ship 2026.7.1",
+    "nonGoals": "No new product scope",
+    "cutSha": "1111111111111111111111111111111111111111",
+    "allowedChangeClasses": [
+      "release-preparation",
+      "release-blocker",
+      "exact-backport",
+      "release-infrastructure",
+      "changelog-only",
+      "exception"
+    ],
+    "exitCriteria": "Checks pass",
+    "approvedExceptions": []
+  },
+  "policy": {
+    "releasePreparation": { "exactPaths": ["package.json"], "prefixes": [] },
+    "releaseInfrastructure": { "exactPaths": [], "prefixes": [".github/workflows/release-"] },
+    "productPathPrefixes": ["src/", "packages/"]
+  },
+  "codeSha": "2222222222222222222222222222222222222222",
+  "releaseSha": "3333333333333333333333333333333333333333",
+  "headSha": "4444444444444444444444444444444444444444",
+  "latestBeta": "2026.7.1-beta.2",
+  "mode": "advisory",
+  "evidenceTimestamp": "2026-07-10T12:30:00Z",
+  "collectionComplete": true,
+  "changes": [
+    {
+      "sha": "a978c06c939afec9bef590d5d1b4029094333009",
+      "prNumber": 102873,
+      "prUrl": "https://github.com/openclaw/openclaw/pull/102873",
+      "title": "feat(providers): add Meta Model API - muse-spark-1.1 (#102873)",
+      "paths": ["extensions/meta-model-api/index.ts", "src/config/zod-schema.core.ts"],
+      "pathsComplete": true
+    },
+    {
+      "sha": "62ba1f63e60fa99b8ec0a90e879b06eecbed31a0",
+      "prNumber": 98021,
+      "prUrl": "https://github.com/openclaw/openclaw/pull/98021",
+      "title": "feat: support GPT-5.6 Ultra across OpenClaw and Codex runtimes (#98021)",
+      "paths": ["extensions/openai/thinking-policy.ts", "src/agents/model-thinking-default.ts"],
+      "pathsComplete": true
+    }
+  ]
+}
