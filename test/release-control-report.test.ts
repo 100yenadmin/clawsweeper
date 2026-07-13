@@ -9,7 +9,10 @@ import {
   renderReleaseReportMarkdown,
   type ReleaseReportInput,
 } from "../dist/release-control/report.js";
-import { parseReleaseContract } from "../dist/release-control/contract.js";
+import {
+  parseReleaseContract,
+  parseReleasePullMetadata,
+} from "../dist/release-control/contract.js";
 
 const historicalFixture = JSON.parse(
   readFileSync(
@@ -121,6 +124,65 @@ Checks pass.
 
   const report = buildReleaseReport(input);
   assert.equal(parsed.value, null);
+  assert.equal(report.status, "incomplete");
+  assert.notEqual(report.changes[0]?.status, "allowed");
+});
+
+test("cannot clear a contract with duplicate authoritative headings", () => {
+  const parsed = parseReleaseContract(`
+## Release train
+2026.7.1
+## Release train
+2026.7.1
+## Release captain
+@alice
+## Goal
+Ship a narrow beta.
+## Non-goals
+No product work.
+## Cut SHA
+1111111111111111111111111111111111111111
+## Allowed change classes
+- changelog-only
+## Exit criteria
+Checks pass.
+## Approved exceptions
+None.
+`);
+  const input = structuredClone(historicalFixture);
+  input.collectionComplete = parsed.value !== null;
+
+  const report = buildReleaseReport(input);
+  assert.equal(parsed.value, null);
+  assert.deepEqual(parsed.missingFields, ["Release train"]);
+  assert.equal(report.status, "incomplete");
+});
+
+test("cannot allow a change with conflicting duplicate release-class metadata", () => {
+  const parsed = parseReleasePullMetadata(`
+Release train: #900
+Release class: release-blocker
+Release class: changelog-only
+Blocker: #901
+Source on main: not applicable
+Exception decision: not required
+`);
+  const input = structuredClone(historicalFixture);
+  input.changes = [
+    {
+      sha: "d".repeat(40),
+      prNumber: 106,
+      title: "docs: release note",
+      paths: ["CHANGELOG.md"],
+      pathsComplete: true,
+      collectionComplete: parsed.value !== null,
+      metadataMissingFields: parsed.missingFields,
+    },
+  ];
+
+  const report = buildReleaseReport(input);
+  assert.equal(parsed.value, null);
+  assert.deepEqual(parsed.missingFields, ["Release class"]);
   assert.equal(report.status, "incomplete");
   assert.notEqual(report.changes[0]?.status, "allowed");
 });

@@ -96,10 +96,16 @@ interface GitHubIssue {
 }
 
 interface GitHubRef {
-  object?: { sha?: string };
+  object?: { sha?: string; type?: string };
+}
+
+interface GitHubTag {
+  sha?: string;
+  object?: { sha?: string; type?: string };
 }
 
 interface GitHubRelease {
+  id?: number;
   tag_name?: string;
   prerelease?: boolean;
   draft?: boolean;
@@ -112,6 +118,8 @@ interface GitHubCompare {
   status?: string;
   total_commits?: number;
   commits?: Array<{ sha?: string }>;
+  base_commit?: { sha?: string };
+  merge_base_commit?: { sha?: string };
 }
 
 interface GitHubCommit {
@@ -161,6 +169,9 @@ interface ReleasePolicyFile {
   >;
 }
 
+const MAX_RELEASE_PAGES = 10;
+const MAX_TAG_DEREFERENCE_DEPTH = 5;
+
 function collectReleaseReportInput(options: ReleaseControlOptions): ReleaseReportInput {
   let collectionComplete = true;
   const evidenceTimes: string[] = [];
@@ -183,18 +194,24 @@ function collectReleaseReportInput(options: ReleaseControlOptions): ReleaseRepor
   const headSha = fullSha(refResult.value?.object?.sha) ?? "";
   if (!headSha) collectionComplete = false;
 
-  const releasesResult = tryGhJson<GitHubRelease[]>(`repos/${options.repo}/releases?per_page=100`);
-  if (!releasesResult.value) collectionComplete = false;
-  const latestBeta = (releasesResult.value ?? [])
+  const releasesResult = collectReleases(options.repo);
+  if (!releasesResult.complete) collectionComplete = false;
+  const latestBeta = releasesResult.releases
     .filter(
       (release) =>
         release.prerelease === true &&
         release.draft !== true &&
         releaseTagMatchesTrain(release.tag_name, options.train),
     )
-    .sort((left, right) => releaseTime(right).localeCompare(releaseTime(left)))[0];
+    .sort(
+      (left, right) =>
+        releaseTime(right).localeCompare(releaseTime(left)) || (right.id ?? 0) - (left.id ?? 0),
+    )[0];
   if (latestBeta && releaseTime(latestBeta)) evidenceTimes.push(releaseTime(latestBeta));
   const releaseSha = labeledSha(latestBeta?.body ?? "", "Release SHA") ?? "";
+  const releaseTagSha = latestBeta?.tag_name
+    ? resolveTagCommit(options.repo, latestBeta.tag_name)
+    : undefined;
   const releaseCommitCollection = releaseSha
     ? collectCommit(options.repo, releaseSha)
     : { value: null, paths: [], complete: false };
@@ -216,8 +233,19 @@ function collectReleaseReportInput(options: ReleaseControlOptions): ReleaseRepor
     !codeSha ||
     !releaseSha ||
     !latestBeta.tag_name ||
+    releaseTagSha !== releaseSha ||
     fullSha(releaseCommit?.sha) !== releaseSha
   ) {
+    collectionComplete = false;
+  }
+  if (
+    !contract.cutSha ||
+    !codeSha ||
+    !completeAncestorRelation(options.repo, contract.cutSha, codeSha)
+  ) {
+    collectionComplete = false;
+  }
+  if (!releaseSha || !headSha || !completeAncestorRelation(options.repo, releaseSha, headSha)) {
     collectionComplete = false;
   }
 
@@ -227,14 +255,11 @@ function collectReleaseReportInput(options: ReleaseControlOptions): ReleaseRepor
       `repos/${options.repo}/compare/${contract.cutSha}...${headSha}`,
     );
     const compare = compareResult.value;
-    if (!compare || !Array.isArray(compare.commits)) {
+    const commits = compare?.commits;
+    if (!completeCompare(compare, contract.cutSha, headSha) || !commits) {
       collectionComplete = false;
     } else {
-      if (compare.status !== "ahead" && compare.status !== "identical") {
-        collectionComplete = false;
-      }
-      if (compare.total_commits !== compare.commits.length) collectionComplete = false;
-      for (const summary of compare.commits) {
+      for (const summary of commits) {
         const sha = fullSha(summary.sha) ?? "";
         if (!sha) {
           collectionComplete = false;
@@ -269,6 +294,95 @@ function collectReleaseReportInput(options: ReleaseControlOptions): ReleaseRepor
     collectionComplete,
     changes,
   };
+}
+
+function collectReleases(repo: string): { releases: GitHubRelease[]; complete: boolean } {
+  const releases: GitHubRelease[] = [];
+  const ids = new Set<number>();
+  const tags = new Set<string>();
+  for (let page = 1; page <= MAX_RELEASE_PAGES; page += 1) {
+    const result = tryGhJson<unknown>(`repos/${repo}/releases?per_page=100&page=${page}`);
+    if (!Array.isArray(result.value) || result.value.length > 100) {
+      return { releases, complete: false };
+    }
+    for (const value of result.value) {
+      if (!validRelease(value)) return { releases, complete: false };
+      const id = value.id!;
+      const tag = value.tag_name!.toLowerCase();
+      if (ids.has(id) || tags.has(tag)) return { releases, complete: false };
+      ids.add(id);
+      tags.add(tag);
+      releases.push(value);
+    }
+    if (result.value.length < 100) return { releases, complete: true };
+  }
+  return { releases, complete: false };
+}
+
+function validRelease(value: unknown): value is GitHubRelease {
+  if (!value || typeof value !== "object") return false;
+  const release = value as GitHubRelease;
+  return (
+    Number.isSafeInteger(release.id) &&
+    (release.id ?? 0) > 0 &&
+    typeof release.tag_name === "string" &&
+    release.tag_name.length > 0 &&
+    release.tag_name === release.tag_name.trim() &&
+    typeof release.prerelease === "boolean" &&
+    typeof release.draft === "boolean" &&
+    typeof release.created_at === "string" &&
+    release.created_at.length > 0 &&
+    (release.published_at === undefined ||
+      release.published_at === null ||
+      typeof release.published_at === "string") &&
+    (release.body === undefined || release.body === null || typeof release.body === "string")
+  );
+}
+
+function resolveTagCommit(repo: string, tag: string): string | undefined {
+  let object = tryGhJson<GitHubRef>(`repos/${repo}/git/ref/tags/${encodeURIComponent(tag)}`).value
+    ?.object;
+  const seen = new Set<string>();
+  for (let depth = 0; depth < MAX_TAG_DEREFERENCE_DEPTH; depth += 1) {
+    const sha = fullSha(object?.sha);
+    if (!sha) return undefined;
+    if (object?.type === "commit") return sha;
+    if (object?.type !== "tag" || seen.has(sha)) return undefined;
+    seen.add(sha);
+    const tagObject = tryGhJson<GitHubTag>(`repos/${repo}/git/tags/${sha}`).value;
+    if (!tagObject || fullSha(tagObject.sha) !== sha) return undefined;
+    object = tagObject.object;
+  }
+  return undefined;
+}
+
+function completeAncestorRelation(repo: string, base: string, head: string): boolean {
+  return completeCompare(
+    tryGhJson<GitHubCompare>(`repos/${repo}/compare/${base}...${head}`).value,
+    base,
+    head,
+  );
+}
+
+function completeCompare(compare: GitHubCompare | null, base: string, head: string): boolean {
+  if (
+    !compare ||
+    !Array.isArray(compare.commits) ||
+    !Number.isSafeInteger(compare.total_commits) ||
+    (compare.total_commits ?? -1) < 0 ||
+    compare.total_commits !== compare.commits.length ||
+    fullSha(compare.base_commit?.sha) !== base ||
+    fullSha(compare.merge_base_commit?.sha) !== base ||
+    compare.commits.some((commit) => !fullSha(commit.sha))
+  ) {
+    return false;
+  }
+  if (compare.status === "identical") {
+    return base === head && compare.commits.length === 0;
+  }
+  return (
+    compare.status === "ahead" && base !== head && fullSha(compare.commits.at(-1)?.sha) === head
+  );
 }
 
 function collectChange(

@@ -133,6 +133,38 @@ test("rejects duplicate and conflicting approved-exception entries", () => {
   assert.deepEqual(contract.missingFields, ["Approved exceptions"]);
 });
 
+test("rejects duplicate contract and pull-request metadata fields", () => {
+  for (const body of [
+    contractWithExceptions("None.").replace(
+      "## Release train\n2026.7.2",
+      "## Release train\n2026.7.2\n## Release train\n2026.7.2",
+    ),
+    contractWithExceptions("None.").replace(
+      "## Release train\n2026.7.2",
+      "Release train: 2026.7.2\n## Release train\n2026.7.2",
+    ),
+  ]) {
+    const contract = parseReleaseContract(body);
+    assert.equal(contract.value, null);
+    assert.deepEqual(contract.missingFields, ["Release train"]);
+  }
+
+  for (const releaseClasses of [
+    "Release class: release-blocker\nRelease class: release-blocker",
+    "Release class: release-blocker\nRelease class: changelog-only",
+  ]) {
+    const metadata = parseReleasePullMetadata(`
+Release train: #900
+${releaseClasses}
+Blocker: #901
+Source on main: not applicable
+Exception decision: not required
+`);
+    assert.equal(metadata.value, null);
+    assert.deepEqual(metadata.missingFields, ["Release class"]);
+  }
+});
+
 test("accepts only explicit approved, rejected, pending, or None exception grammar", () => {
   const contract = parseReleaseContract(
     contractWithExceptions(`

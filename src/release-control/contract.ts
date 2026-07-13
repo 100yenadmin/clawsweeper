@@ -46,6 +46,11 @@ interface ApprovedExceptionsParseResult {
   valid: boolean;
 }
 
+interface CollectedFields {
+  values: Map<string, string>;
+  duplicates: Set<string>;
+}
+
 const CONTRACT_FIELDS = [
   "Release train",
   "Release captain",
@@ -66,8 +71,9 @@ const PULL_FIELDS = [
 ] as const;
 
 export function parseReleaseContract(body: string): ParseResult<ReleaseContract> {
-  const fields = markdownFields(body, CONTRACT_FIELDS);
-  const missingFields = CONTRACT_FIELDS.filter((field) => fields.get(field) === undefined);
+  const collected = markdownFields(body, CONTRACT_FIELDS);
+  const fields = collected.values;
+  const missingFields = missingOrDuplicateFields(collected, CONTRACT_FIELDS);
   const train = fields.get("Release train")?.trim() ?? "";
   const captain = loginFrom(fields.get("Release captain") ?? "");
   const cutSha = fullShaFrom(fields.get("Cut SHA") ?? "");
@@ -104,8 +110,9 @@ export function parseReleaseContract(body: string): ParseResult<ReleaseContract>
 }
 
 export function parseReleasePullMetadata(body: string): ParseResult<ReleasePullMetadata> {
-  const fields = inlineFields(body, PULL_FIELDS);
-  const missingFields = PULL_FIELDS.filter((field) => fields.get(field) === undefined);
+  const collected = inlineFields(body, PULL_FIELDS);
+  const fields = collected.values;
+  const missingFields = missingOrDuplicateFields(collected, PULL_FIELDS);
   const contractIssue = issueNumberFrom(fields.get("Release train") ?? "");
   const releaseClass = releaseClassFrom(fields.get("Release class") ?? "");
   if (!contractIssue) addMissing(missingFields, "Release train");
@@ -129,7 +136,7 @@ export function parseReleasePullMetadata(body: string): ParseResult<ReleasePullM
   return { value, missingFields: [] };
 }
 
-function markdownFields(body: string, names: readonly string[]): Map<string, string> {
+function markdownFields(body: string, names: readonly string[]): CollectedFields {
   const result = inlineFields(body, names);
   const lines = body.replaceAll("\r\n", "\n").split("\n");
   for (let index = 0; index < lines.length; index += 1) {
@@ -141,22 +148,34 @@ function markdownFields(body: string, names: readonly string[]): Map<string, str
       if (/^#{1,6}\s+/.test(lines[cursor] ?? "")) break;
       content.push(lines[cursor] ?? "");
     }
-    result.set(name, content.join("\n").trim());
+    addCollectedField(result, name, content.join("\n").trim());
   }
   return result;
 }
 
-function inlineFields(body: string, names: readonly string[]): Map<string, string> {
-  const result = new Map<string, string>();
+function inlineFields(body: string, names: readonly string[]): CollectedFields {
+  const result: CollectedFields = { values: new Map(), duplicates: new Set() };
   for (const line of body.replaceAll("\r\n", "\n").split("\n")) {
     const match = line.match(/^\s*(?:[-*]\s+)?(?:\*\*)?([^:*]+?)(?:\*\*)?\s*:\s*(.*?)\s*$/);
     if (!match) continue;
     const name = names.find(
       (candidate) => candidate.toLowerCase() === (match[1] ?? "").trim().toLowerCase(),
     );
-    if (name) result.set(name, (match[2] ?? "").trim());
+    if (name) addCollectedField(result, name, (match[2] ?? "").trim());
   }
   return result;
+}
+
+function addCollectedField(result: CollectedFields, name: string, value: string): void {
+  if (result.values.has(name)) {
+    result.duplicates.add(name);
+    return;
+  }
+  result.values.set(name, value);
+}
+
+function missingOrDuplicateFields(fields: CollectedFields, names: readonly string[]): string[] {
+  return names.filter((name) => !fields.values.has(name) || fields.duplicates.has(name));
 }
 
 function releaseClassesFrom(value: string): ReleaseClass[] {
