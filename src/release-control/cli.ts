@@ -700,14 +700,17 @@ function fullSha(value: string | undefined): string | undefined {
 
 function labeledSha(body: string, label: string): string | undefined {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return body
-    .match(
-      new RegExp(
-        `(?:^|\\n)\\s*(?:[-*]\\s+)?${escaped}\\s*:\\s*\`?([0-9a-f]{40})\`?\\s*(?:$|\\n)`,
-        "i",
-      ),
-    )?.[1]
-    ?.toLowerCase();
+  const declaration = new RegExp(`^\\s*(?:[-*]\\s+)?${escaped}\\s*:\\s*(.*?)\\s*$`, "i");
+  const values = body
+    .replaceAll("\r\n", "\n")
+    .split("\n")
+    .flatMap((line) => {
+      const match = line.match(declaration);
+      return match?.[1] === undefined ? [] : [match[1]];
+    });
+  if (values.length !== 1) return undefined;
+  const sha = values[0]?.match(/^(?:`([0-9a-f]{40})`|([0-9a-f]{40}))$/i);
+  return (sha?.[1] ?? sha?.[2])?.toLowerCase();
 }
 
 function releaseTagMatchesTrain(tag: string | undefined, train: string): boolean {

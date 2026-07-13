@@ -165,6 +165,24 @@ Exception decision: not required
   }
 });
 
+test("rejects blank values for every authoritative pull-request metadata field", () => {
+  const fields = new Map([
+    ["Release train", "#900"],
+    ["Release class", "changelog-only"],
+    ["Blocker", "not applicable"],
+    ["Source on main", "not applicable"],
+    ["Exception decision", "not required"],
+  ]);
+  for (const field of fields.keys()) {
+    const body = [...fields]
+      .map(([name, value]) => `${name}: ${name === field ? "   " : value}`)
+      .join("\n");
+    const metadata = parseReleasePullMetadata(body);
+    assert.equal(metadata.value, null, field);
+    assert.deepEqual(metadata.missingFields, [field], field);
+  }
+});
+
 test("accepts only explicit approved, rejected, pending, or None exception grammar", () => {
   const contract = parseReleaseContract(
     contractWithExceptions(`

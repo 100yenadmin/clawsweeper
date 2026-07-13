@@ -113,6 +113,9 @@ export function parseReleasePullMetadata(body: string): ParseResult<ReleasePullM
   const collected = inlineFields(body, PULL_FIELDS);
   const fields = collected.values;
   const missingFields = missingOrDuplicateFields(collected, PULL_FIELDS);
+  for (const field of PULL_FIELDS) {
+    if (!fields.get(field)?.trim()) addMissing(missingFields, field);
+  }
   const contractIssue = issueNumberFrom(fields.get("Release train") ?? "");
   const releaseClass = releaseClassFrom(fields.get("Release class") ?? "");
   if (!contractIssue) addMissing(missingFields, "Release train");

@@ -592,3 +592,20 @@ test("fails closed for missing release pages and duplicate release identities", 
     "invalid page",
   );
 });
+
+test("fails closed for duplicate Release SHA declarations", () => {
+  for (const [label, secondSha] of [
+    ["duplicate same SHA", PROVENANCE_RELEASE_SHA],
+    ["conflicting SHA", PROVENANCE_OTHER_SHA],
+  ] as const) {
+    const release = {
+      ...betaRelease(),
+      body: `- Release SHA: \`${PROVENANCE_RELEASE_SHA}\`\n- Release SHA: \`${secondSha}\``,
+    };
+    const report = runReleaseAuditScenario({
+      legacyReleases: [release],
+      releasePages: { 1: [release] },
+    }).report;
+    assert.equal(report.status, "incomplete", label);
+  }
+});

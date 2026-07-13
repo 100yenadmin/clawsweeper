@@ -186,3 +186,41 @@ Exception decision: not required
   assert.equal(report.status, "incomplete");
   assert.notEqual(report.changes[0]?.status, "allowed");
 });
+
+test("cannot allow or clear changelog-only metadata with blank proof fields", () => {
+  for (const blankField of ["Blocker", "Source on main", "Exception decision"] as const) {
+    const values = {
+      Blocker: "not applicable",
+      "Source on main": "not applicable",
+      "Exception decision": "not required",
+    };
+    values[blankField] = "   ";
+    const parsed = parseReleasePullMetadata(`
+Release train: #900
+Release class: changelog-only
+Blocker: ${values.Blocker}
+Source on main: ${values["Source on main"]}
+Exception decision: ${values["Exception decision"]}
+`);
+    const input = structuredClone(historicalFixture);
+    input.changes = [
+      {
+        sha: "e".repeat(40),
+        prNumber: 107,
+        title: "docs: release note",
+        paths: ["CHANGELOG.md"],
+        pathsComplete: true,
+        collectionComplete: parsed.value !== null,
+        ...(parsed.value
+          ? { metadata: parsed.value }
+          : { metadataMissingFields: parsed.missingFields }),
+      },
+    ];
+
+    const report = buildReleaseReport(input);
+    assert.equal(parsed.value, null, blankField);
+    assert.deepEqual(parsed.missingFields, [blankField], blankField);
+    assert.equal(report.status, "incomplete", blankField);
+    assert.notEqual(report.changes[0]?.status, "allowed", blankField);
+  }
+});
