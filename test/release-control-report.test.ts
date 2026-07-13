@@ -9,6 +9,7 @@ import {
   renderReleaseReportMarkdown,
   type ReleaseReportInput,
 } from "../dist/release-control/report.js";
+import { parseReleaseContract } from "../dist/release-control/contract.js";
 
 const historicalFixture = JSON.parse(
   readFileSync(
@@ -78,4 +79,48 @@ test("applies report status precedence incomplete over blocked over attention ov
 
   base.collectionComplete = false;
   assert.equal(buildReleaseReport(base).status, "incomplete");
+});
+
+test("cannot allow or clear a negated approved-exception contract line", () => {
+  const decisionUrl = "https://github.com/openclaw/openclaw/issues/900#issuecomment-106";
+  const parsed = parseReleaseContract(`
+## Release train
+2026.7.1
+## Release captain
+@alice
+## Goal
+Ship a narrow beta.
+## Non-goals
+No product work.
+## Cut SHA
+1111111111111111111111111111111111111111
+## Allowed change classes
+- exception
+## Exit criteria
+Checks pass.
+## Approved exceptions
+#106: not approved by @alice (${decisionUrl})
+`);
+  const input = structuredClone(historicalFixture);
+  input.collectionComplete = parsed.value !== null;
+  input.contract.approvedExceptions = parsed.value?.approvedExceptions ?? [];
+  input.changes = [
+    {
+      sha: "c".repeat(40),
+      prNumber: 106,
+      title: "docs: exception candidate",
+      paths: ["docs/release-note.md"],
+      pathsComplete: true,
+      metadata: {
+        contractIssue: input.contractIssue.number,
+        releaseClass: "exception",
+        exceptionDecisionUrl: decisionUrl,
+      },
+    },
+  ];
+
+  const report = buildReleaseReport(input);
+  assert.equal(parsed.value, null);
+  assert.equal(report.status, "incomplete");
+  assert.notEqual(report.changes[0]?.status, "allowed");
 });

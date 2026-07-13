@@ -41,6 +41,11 @@ export interface ParseResult<T> {
   missingFields: string[];
 }
 
+interface ApprovedExceptionsParseResult {
+  value: ApprovedException[];
+  valid: boolean;
+}
+
 const CONTRACT_FIELDS = [
   "Release train",
   "Release captain",
@@ -67,7 +72,8 @@ export function parseReleaseContract(body: string): ParseResult<ReleaseContract>
   const captain = loginFrom(fields.get("Release captain") ?? "");
   const cutSha = fullShaFrom(fields.get("Cut SHA") ?? "");
   const allowedChangeClasses = releaseClassesFrom(fields.get("Allowed change classes") ?? "");
-  const approvedExceptions = approvedExceptionsFrom(fields.get("Approved exceptions") ?? "");
+  const approvedExceptionsResult = approvedExceptionsFrom(fields.get("Approved exceptions") ?? "");
+  const approvedExceptions = approvedExceptionsResult.value;
   if (!train) addMissing(missingFields, "Release train");
   if (!captain) addMissing(missingFields, "Release captain");
   if (!fields.get("Goal")?.trim()) addMissing(missingFields, "Goal");
@@ -76,6 +82,7 @@ export function parseReleaseContract(body: string): ParseResult<ReleaseContract>
   if (allowedChangeClasses.length === 0) addMissing(missingFields, "Allowed change classes");
   if (!fields.get("Exit criteria")?.trim()) addMissing(missingFields, "Exit criteria");
   if (!fields.get("Approved exceptions")?.trim()) addMissing(missingFields, "Approved exceptions");
+  if (!approvedExceptionsResult.valid) addMissing(missingFields, "Approved exceptions");
   if (new Set(approvedExceptions.map((entry) => entry.number)).size !== approvedExceptions.length) {
     addMissing(missingFields, "Approved exceptions");
   }
@@ -164,25 +171,55 @@ function releaseClassFrom(value: string): ReleaseClass | undefined {
   return RELEASE_CLASSES.find((candidate) => candidate === normalized);
 }
 
-function approvedExceptionsFrom(value: string): ApprovedException[] {
+const GITHUB_LOGIN = "[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?";
+const DECISION_URL =
+  "https:\\/\\/github\\.com\\/[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\/(?:issues|pull)\\/[1-9]\\d*#issuecomment-[1-9]\\d*";
+const DECIDED_EXCEPTION = new RegExp(
+  `^\\s*(?:[-*]\\s+)?#([1-9]\\d*):\\s*(approved|rejected)\\s+by\\s+@(${GITHUB_LOGIN})\\s+\\((${DECISION_URL})\\)\\s*$`,
+  "i",
+);
+const PENDING_EXCEPTION = new RegExp(
+  `^\\s*(?:[-*]\\s+)?#([1-9]\\d*):\\s*pending\\s+\\((${DECISION_URL})\\)\\s*$`,
+  "i",
+);
+
+function approvedExceptionsFrom(value: string): ApprovedExceptionsParseResult {
+  const trimmed = value.trim();
+  if (/^None\.$/i.test(trimmed)) return { value: [], valid: true };
+
   const exceptions: ApprovedException[] = [];
-  for (const line of value.split("\n")) {
-    const number = issueNumberFrom(line);
-    if (!number) continue;
-    const normalized = line.toLowerCase();
-    const decision = normalized.includes("reject")
-      ? "rejected"
-      : normalized.includes("pending")
-        ? "pending"
-        : "approved";
-    const entry: ApprovedException = { number, decision };
-    const approverMatch = line.match(/(?:approved|rejected)\s+by\s+@?([A-Za-z0-9-]+)/i);
-    const decisionUrl = urlFrom(line);
-    if (approverMatch?.[1]) entry.approver = approverMatch[1];
-    if (decisionUrl) entry.decisionUrl = decisionUrl;
-    exceptions.push(entry);
+  const lines = trimmed.split("\n").filter((line) => line.trim());
+  if (lines.length === 0) return { value: [], valid: false };
+
+  for (const line of lines) {
+    const decided = line.match(DECIDED_EXCEPTION);
+    if (decided?.[1] && decided[2] && decided[3] && decided[4]) {
+      const number = Number(decided[1]);
+      if (!Number.isSafeInteger(number)) return { value: [], valid: false };
+      exceptions.push({
+        number,
+        decision: decided[2].toLowerCase() as "approved" | "rejected",
+        approver: decided[3],
+        decisionUrl: decided[4],
+      });
+      continue;
+    }
+
+    const pending = line.match(PENDING_EXCEPTION);
+    if (pending?.[1] && pending[2]) {
+      const number = Number(pending[1]);
+      if (!Number.isSafeInteger(number)) return { value: [], valid: false };
+      exceptions.push({ number, decision: "pending", decisionUrl: pending[2] });
+      continue;
+    }
+
+    return { value: [], valid: false };
   }
-  return exceptions.sort((left, right) => left.number - right.number);
+
+  return {
+    value: exceptions.sort((left, right) => left.number - right.number),
+    valid: true,
+  };
 }
 
 function issueNumberFrom(value: string): number | undefined {

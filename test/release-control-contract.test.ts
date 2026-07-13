@@ -6,6 +6,27 @@ import {
   parseReleasePullMetadata,
 } from "../dist/release-control/contract.js";
 
+function contractWithExceptions(approvedExceptions: string): string {
+  return `
+## Release train
+2026.7.2
+## Release captain
+@alice
+## Goal
+Ship a narrow beta.
+## Non-goals
+No product work.
+## Cut SHA
+0123456789abcdef0123456789abcdef01234567
+## Allowed change classes
+- exception
+## Exit criteria
+Checks pass.
+## Approved exceptions
+${approvedExceptions}
+`;
+}
+
 test("parses the release contract and release-target pull request metadata", () => {
   const contract = parseReleaseContract(`
 ## Release train
@@ -101,26 +122,49 @@ Exception decision: not required
 });
 
 test("rejects duplicate and conflicting approved-exception entries", () => {
-  const contract = parseReleaseContract(`
-## Release train
-2026.7.2
-## Release captain
-@alice
-## Goal
-Ship a narrow beta.
-## Non-goals
-No product work.
-## Cut SHA
-0123456789abcdef0123456789abcdef01234567
-## Allowed change classes
-- exception
-## Exit criteria
-Checks pass.
-## Approved exceptions
+  const contract = parseReleaseContract(
+    contractWithExceptions(`
 - #991: approved by @alice (https://github.com/openclaw/openclaw/issues/900#issuecomment-1)
 - #991: rejected by @alice (https://github.com/openclaw/openclaw/issues/900#issuecomment-2)
-`);
+`),
+  );
 
   assert.equal(contract.value, null);
   assert.deepEqual(contract.missingFields, ["Approved exceptions"]);
+});
+
+test("accepts only explicit approved, rejected, pending, or None exception grammar", () => {
+  const contract = parseReleaseContract(
+    contractWithExceptions(`
+- #991: APPROVED by @alice (https://github.com/openclaw/openclaw/issues/900#issuecomment-1)
+* #992: Rejected BY @alice (https://github.com/openclaw/openclaw/pull/992#issuecomment-2)
+#993: Pending (https://github.com/openclaw/openclaw/issues/900#issuecomment-3)
+`),
+  );
+  assert.deepEqual(contract.missingFields, []);
+  assert.deepEqual(
+    contract.value?.approvedExceptions.map(({ number, decision }) => ({ number, decision })),
+    [
+      { number: 991, decision: "approved" },
+      { number: 992, decision: "rejected" },
+      { number: 993, decision: "pending" },
+    ],
+  );
+  assert.deepEqual(parseReleaseContract(contractWithExceptions("None.")).missingFields, []);
+
+  const decisionUrl = "https://github.com/openclaw/openclaw/issues/900#issuecomment-106";
+  for (const invalid of [
+    `#106: not approved by @alice (${decisionUrl})`,
+    `#106: maybe (${decisionUrl})`,
+    "#106: approved by @alice",
+    `#106: approved (${decisionUrl})`,
+    `#106: approved by @alice (${decisionUrl}) after review`,
+    "#106: approved by @alice (https://github.com/openclaw/openclaw/issues/900)",
+    `Decision #106: approved by @alice (${decisionUrl})`,
+    `None.\n#106: approved by @alice (${decisionUrl})`,
+  ]) {
+    const result = parseReleaseContract(contractWithExceptions(invalid));
+    assert.equal(result.value, null, invalid);
+    assert.deepEqual(result.missingFields, ["Approved exceptions"], invalid);
+  }
 });
