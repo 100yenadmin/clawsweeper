@@ -753,7 +753,7 @@ test("maintainer and bot proof exemptions keep readiness, ratings, and security 
     }),
     "none",
   );
-  assert.match(securityComment, /needs changes before merge/i);
+  assert.match(securityComment, /blocked before merge/i);
   assert.match(securityComment, /### Security\n\nNeeds attention:/);
   assert.doesNotMatch(securityComment, /needs real behavior proof before merge/i);
 });
@@ -1161,7 +1161,7 @@ Full review comments:
   assert.match(comment, /## Findings/);
   assert.doesNotMatch(comment, /clawsweeper-verdict:pass/);
   assert.match(markers, /clawsweeper-verdict:needs-changes/);
-  assert.match(markers, /clawsweeper-action:fix-required/);
+  assert.doesNotMatch(markers, /clawsweeper-action:fix-required/);
   assert.doesNotMatch(markers, /clawsweeper-verdict:pass/);
 });
 
@@ -1205,7 +1205,7 @@ Full review comments:
   const markers = reviewAutomationMarkersFromReport(report);
 
   assert.match(markers, /clawsweeper-verdict:needs-changes/);
-  assert.match(markers, /clawsweeper-action:fix-required/);
+  assert.doesNotMatch(markers, /clawsweeper-action:fix-required/);
   assert.doesNotMatch(markers, /clawsweeper-verdict:needs-human/);
 });
 

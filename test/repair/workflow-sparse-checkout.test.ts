@@ -247,10 +247,7 @@ test("publication lanes ignore retired live-proof attachments", () => {
 });
 
 test("state-hydrating sparse repair workflows keep hydration dependencies", () => {
-  for (const workflowPath of [
-    ".github/workflows/repair-comment-router.yml",
-    ".github/workflows/spam-scanner.yml",
-  ]) {
+  for (const workflowPath of SPARSE_REPAIR_BUILD_WORKFLOWS) {
     const entries = sourceSparseCheckoutEntries(workflowPath);
     for (const requiredPath of [
       "scripts/hydrate-state.ts",

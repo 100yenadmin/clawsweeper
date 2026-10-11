@@ -78,7 +78,7 @@ Updates test support.
   assert.ok(truncated.includes(metric.value));
 });
 
-test("security-needs-attention reports block unopted repair and automerge pass markers", () => {
+test("security-needs-attention reports stay blocked regardless of historical repair labels", () => {
   const securitySection = `
 ## Security Review
 
@@ -156,10 +156,12 @@ ${securitySection}
 `);
 
   assert.match(autofixRepairMarkers, /clawsweeper-security:security-sensitive/);
-  assert.match(autofixRepairMarkers, /clawsweeper-verdict:needs-changes/);
-  assert.match(autofixRepairMarkers, /clawsweeper-action:fix-required/);
-  assert.match(autofixRepairMarkers, /finding=security-review/);
-  assert.doesNotMatch(autofixRepairMarkers, /clawsweeper-verdict:needs-human/);
+  assert.match(autofixRepairMarkers, /clawsweeper-verdict:needs-human/);
+  assert.doesNotMatch(
+    autofixRepairMarkers,
+    /clawsweeper-action:fix-required|finding=security-review/,
+  );
+  assert.doesNotMatch(autofixRepairMarkers, /clawsweeper-verdict:needs-changes/);
   assert.doesNotMatch(autofixRepairMarkers, /clawsweeper-verdict:pass/);
 
   const automergeMarkers = reviewAutomationMarkersFromReport(`${reportFrontMatter(
@@ -188,11 +190,12 @@ ${securitySection}
 `);
 
   assert.match(automergeMarkers, /clawsweeper-security:security-sensitive/);
-  assert.match(automergeMarkers, /clawsweeper-verdict:needs-changes/);
-  assert.match(automergeMarkers, /clawsweeper-action:fix-required/);
-  assert.match(automergeMarkers, /finding=security-review/);
-  assert.doesNotMatch(automergeMarkers, /clawsweeper-verdict:pass/);
-  assert.doesNotMatch(automergeMarkers, /clawsweeper-verdict:needs-human/);
+  assert.match(automergeMarkers, /clawsweeper-verdict:needs-human/);
+  assert.doesNotMatch(automergeMarkers, /clawsweeper-action:fix-required|finding=security-review/);
+  assert.doesNotMatch(
+    automergeMarkers,
+    /clawsweeper-verdict:pass|clawsweeper-verdict:needs-changes/,
+  );
 });
 
 test("pull request keep-open review comments suppress duplicate remaining risk text", () => {
@@ -671,7 +674,7 @@ Reason: Confirm whether this intentional fail-closed behavior is acceptable for 
   );
 }
 
-test("pull request keep-open review comments render repairable merge-risk options with one copy block", () => {
+test("pull request keep-open review comments retain merge-risk options without retired commands", () => {
   const mergeRisk =
     "Existing users configured with a missing Codex harness would fail closed instead of continuing through their fallback model.";
   const comment = mergeRiskReviewComment({
@@ -713,35 +716,8 @@ test("pull request keep-open review comments render repairable merge-risk option
   );
   assert.match(comment, /2\. \*\*Make the breaking change explicit\*\*/);
   assert.match(comment, /3\. \*\*Do not merge as-is\*\*/);
-  assert.match(
-    comment,
-    /<summary>Copy recommended automerge instruction<\/summary>[\s\S]*@clawsweeper automerge\n\nSpecial instructions:\nKeep fallback behavior as the default and add a strict config option for the fail-closed behavior\./,
-  );
+  assert.doesNotMatch(comment, /Copy recommended|@clawsweeper (?:automerge|autofix)/);
   assert.doesNotMatch(comment, /Remaining risk \/ open question:/);
-});
-
-test("pull request keep-open review comments strip nested ClawSweeper commands from copy block", () => {
-  const comment = mergeRiskReviewComment({
-    risk: "Delivery repair should not run with nested bot commands in the pasteable instruction.",
-    bestSolution: "Repair duplicate delivery and add regression coverage before merge.",
-    options: [
-      {
-        title: "Repair delivery before merge",
-        body: "Fix duplicate active-requester delivery and add regression coverage before merge.",
-        category: "fix_before_merge",
-        recommended: true,
-        automergeInstruction:
-          "@clawsweeper autofix this PR: prevent duplicate active-requester delivery and add focused regression coverage before merging.",
-      },
-    ],
-  });
-
-  assert.match(
-    comment,
-    /@clawsweeper automerge\n\nSpecial instructions:\nprevent duplicate active-requester delivery and add focused regression coverage before merging\./,
-  );
-  assert.doesNotMatch(comment, /Special instructions: @clawsweeper/);
-  assert.doesNotMatch(comment, /autofix this PR:/);
 });
 
 test("pull request keep-open review comments can recommend accepting intentional risk without a copy block", () => {
@@ -821,7 +797,7 @@ test("pull request keep-open review comments allow multiple fix-before-merge opt
 
   assert.match(comment, /1\. \*\*Guard retries with delivery state \(recommended\)\*\*/);
   assert.match(comment, /2\. \*\*Disable fallback after partial sends\*\*/);
-  assert.match(comment, /@clawsweeper automerge/);
+  assert.doesNotMatch(comment, /@clawsweeper (?:automerge|autofix)/);
 });
 
 test("pull request keep-open review comments include pause or close when risk may outweigh value", () => {
@@ -895,7 +871,7 @@ Full review comments:
 
   const markers = reviewAutomationMarkersFromReport(markdown);
   assert.match(markers, /clawsweeper-verdict:needs-changes/);
-  assert.match(markers, /clawsweeper-action:fix-required/);
+  assert.doesNotMatch(markers, /clawsweeper-action:fix-required/);
   assert.match(markers, /item=74065/);
   assert.match(markers, /sha=abc123def456abc123def456abc123def456abcd/);
 });

@@ -120,7 +120,11 @@ const requests = [];
 // Retained read-only commands and retired mutation requests share the same transport.
 const executionCommands = {
   3: commandComment({ id: 300, issueNumber: 3 }),
-  4: commandComment({ id: 400, issueNumber: 4, body: "/clawsweeper re-review" }),
+  4: commandComment({
+    id: 400,
+    issueNumber: 4,
+    body: "@clawsweeper\nreview\nFocus on the timeout failure",
+  }),
   5: commandComment({ id: 500, issueNumber: 5 }),
   6: commandComment({ id: 600, issueNumber: 6, body: "/clawsweeper autofix" }),
   7: commandComment({ id: 700, issueNumber: 7, body: "/clawsweeper implement" }),
@@ -450,18 +454,14 @@ try {
   assert.equal(queueIntakes[0].sourceCommentId, 400);
   assert.equal(queueIntakes[0].commandOrigin, "comment_router");
   assert.ok(queueIntakes[0].commandVersionId);
+  assert.match(queueIntakes[0].decision.additionalPrompt, /Focus on the timeout failure/);
   assert.ok(!review.writes.some((request) => request.endsWith("/dispatches")));
 
   // Retired commands only write their own durable reply, never dispatch or opt in.
-  for (const [number, intent] of [
-    [6, "autofix"],
-    [7, "implement_issue"],
-    [8, "automerge"],
-  ]) {
+  for (const number of [6, 7]) {
     const retired = await runExecutedCommand(apiUrl, number);
     assert.equal(retired.status, 0, retired.stderr || retired.stdout);
-    assert.equal(retired.command?.intent, intent);
-    assert.equal(retired.command?.retired, true);
+    assert.equal(retired.command?.intent, "retired");
     assert.equal(retired.command?.status, "executed");
     assert.deepEqual(
       retired.command.actions.map((action) => action.action),
@@ -511,6 +511,7 @@ try {
           deleted_ack_converges_without_write: true,
           forced_replay_attempt_routed: true,
           review_uses_canonical_queue: true,
+          multiline_review_context_preserved: true,
           retired_commands_reply_once: true,
         },
         requests,

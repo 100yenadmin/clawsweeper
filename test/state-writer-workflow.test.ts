@@ -127,7 +127,6 @@ test("post-side-effect git bookkeeping is non-fatal while durability fences stay
   };
 
   for (const [file, job, name] of [
-    [".github/workflows/spam-scanner.yml", "scan", "Commit spam scanner audit"],
     [
       ".github/workflows/failed-review-retry.yml",
       "retry-failed-reviews",
@@ -144,7 +143,6 @@ test("post-side-effect git bookkeeping is non-fatal while durability fences stay
       "route-comments",
       "Commit comment router ledger",
     ],
-    [".github/workflows/repair-publish-results.yml", "publish", "Commit result ledger"],
     [".github/workflows/audit.yml", "audit-dashboard", "Commit Audit Health"],
   ]) {
     assert.notEqual(step(file, job, name)["continue-on-error"], true, `${file}:${job}:${name}`);
@@ -189,6 +187,7 @@ test("retired migration and Git recovery surfaces stay deleted", () => {
     ".github/workflows/repair-issue-implementation-backfill.yml",
     ".github/workflows/repair-self-heal.yml",
     ".github/workflows/repair-conflict-self-heal.yml",
+    ".github/workflows/repair-publish-results.yml",
     ".github/workflows/automerge-e2e.yml",
     "src/repair/state-publication-batch.ts",
     "src/repair/state-materializer.ts",
