@@ -6,14 +6,9 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "./lib.js";
 import { isJsonObject } from "./json-types.js";
-import {
-  frontMatterField,
-  frontMatterJsonArray,
-  frontMatterValue,
-  sectionValue,
-} from "../report-front-matter.js";
+import { frontMatterValue } from "../report-front-matter.js";
 import { reportReviewDecision } from "../report-review-decision.js";
-import { readReviewRecordOrLegacy } from "../review-record.js";
+import { requireReviewRecord, ReviewRecordFormatError } from "../review-record.js";
 import { AUTOMATION_LIMITS, WORKER_CONFIG, workerLimit, type WorkerLane } from "../limits.js";
 import {
   fetchExactReviewQueuePressure,
@@ -1383,6 +1378,15 @@ function prioritizeFastCloseCandidates(
   );
 }
 
+function readableReviewDecision(markdown: string) {
+  try {
+    return reportReviewDecision(markdown);
+  } catch (error) {
+    if (!(error instanceof ReviewRecordFormatError)) throw error;
+    return null;
+  }
+}
+
 function selectedProposedItemCandidates(
   options: ProposedItemOptions,
   selection: ProposedItemSelection,
@@ -1418,7 +1422,8 @@ function selectedProposedItemCandidates(
           if (repoFor(markdown, name) !== options.targetRepo) return [];
           const type = frontMatterValue(markdown, "type") ?? "";
           if (options.applyKind !== "all" && type && type !== options.applyKind) return [];
-          const reviewed = reportReviewDecision(markdown);
+          const reviewed = readableReviewDecision(markdown);
+          if (!reviewed) return [];
           const { decision, confidence } = reviewed;
           const reason = reviewed.closeReason ?? "";
           const action = frontMatterValue(markdown, "action_taken") ?? "";
@@ -1604,7 +1609,9 @@ function inconsistentOrStaleProposedItemCount(
       if (options.applyKind !== "all" && type && type !== options.applyKind) return false;
       const action = frontMatterValue(markdown, "action_taken");
       if (action !== "proposed_close" && action !== "retry_pr_close_coverage_proof") return false;
-      const reason = reportReviewDecision(markdown).closeReason ?? "";
+      const reviewed = readableReviewDecision(markdown);
+      if (!reviewed) return false;
+      const reason = reviewed.closeReason ?? "";
       if (allowedCloseReasons && !allowedCloseReasons.has(reason)) return false;
       if (
         ALLOWED_CLOSE_REASONS.has(reason) &&
@@ -1815,17 +1822,7 @@ function pullRequestClosePromotionReasons(
 // The review model names the covering PR in `root_cause_cluster.canonicalRef`.
 // Report prose never selects a supersession candidate.
 function hasCanonicalPullRequest(markdown: string, targetRepo: string): boolean {
-  let cluster: unknown;
-  const { decision } = readReviewRecordOrLegacy(markdown, () => null);
-  if (decision) {
-    cluster = decision.rootCauseCluster;
-  } else {
-    try {
-      cluster = JSON.parse(frontMatterValue(markdown, "root_cause_cluster") ?? "");
-    } catch {
-      return false;
-    }
-  }
+  const cluster = requireReviewRecord(markdown).decision.rootCauseCluster;
   const canonicalRef = isJsonObject(cluster) ? cluster.canonicalRef : null;
   if (typeof canonicalRef !== "string") return false;
   const canonicalNumber = canonicalRef.match(
@@ -1835,112 +1832,33 @@ function hasCanonicalPullRequest(markdown: string, targetRepo: string): boolean 
 }
 
 function hasRecommendedPauseOrCloseOption(markdown: string): boolean {
-  const { decision } = readReviewRecordOrLegacy(markdown, () => null);
-  const options =
-    decision?.mergeRiskOptions ?? frontMatterJsonArray(markdown, "merge_risk_options");
+  const options = requireReviewRecord(markdown).decision.mergeRiskOptions;
   return options.some((entry) => {
     if (!isJsonObject(entry)) return false;
     return entry.category === "pause_or_close" && entry.recommended === true;
   });
 }
 
-const PR_RATING_TIER_VALUES = new Set(["S", "A", "B", "C", "D", "F", "NA"]);
-const PROOF_STATUS_VALUES = new Set([
-  "sufficient",
-  "override",
-  "insufficient",
-  "mock_only",
-  "missing",
-  "not_applicable",
-]);
-
-function trustedPromotionValue(
-  markdown: string,
-  key: string,
-  legacySectionValue: string,
-  allowed: ReadonlySet<string>,
-): { invalid: boolean; value: string } {
-  const field = frontMatterField(markdown, key);
-  if (field.status === "ambiguous") return { invalid: true, value: "" };
-  const value = field.status === "value" ? field.value : legacySectionValue;
-  return { invalid: Boolean(value) && !allowed.has(value), value };
-}
-
 function hasLowSignalPullRequestPromotionSignal(markdown: string): boolean {
-  const { decision } = readReviewRecordOrLegacy(markdown, () => null);
-  if (decision) {
-    return (
-      decision.prRating.overallTier === "F" &&
-      (decision.prRating.proofTier === "F" ||
-        ["missing", "mock_only", "insufficient"].includes(decision.realBehaviorProof.status))
-    );
-  }
-  const ratingSection = sectionValue(markdown, "PR Rating");
-  const proofSection = sectionValue(markdown, "Real Behavior Proof");
-  const overallTier = trustedPromotionValue(
-    markdown,
-    "pr_rating_overall",
-    sectionLineValue(ratingSection, "Overall tier"),
-    PR_RATING_TIER_VALUES,
-  );
-  const proofTier = trustedPromotionValue(
-    markdown,
-    "pr_rating_proof",
-    sectionLineValue(ratingSection, "Proof tier"),
-    PR_RATING_TIER_VALUES,
-  );
-  const proofStatus = trustedPromotionValue(
-    markdown,
-    "real_behavior_proof_status",
-    sectionLineValue(proofSection, "Status"),
-    PROOF_STATUS_VALUES,
-  );
-  if (overallTier.invalid || proofTier.invalid || proofStatus.invalid) return false;
+  const { decision } = requireReviewRecord(markdown);
   return (
-    overallTier.value === "F" &&
-    (proofTier.value === "F" ||
-      ["missing", "mock_only", "insufficient"].includes(proofStatus.value))
+    decision.prRating.overallTier === "F" &&
+    (decision.prRating.proofTier === "F" ||
+      ["missing", "mock_only", "insufficient"].includes(decision.realBehaviorProof.status))
   );
 }
 
 function hasAuthorPrBudgetPromotionSignal(markdown: string): boolean {
-  const { decision } = readReviewRecordOrLegacy(markdown, () => null);
-  if (decision) {
-    if (
-      ["S", "A", "B"].includes(decision.prRating.overallTier) &&
-      ["sufficient", "override"].includes(decision.realBehaviorProof.status)
-    ) {
-      return false;
-    }
-    return (
-      ["D", "F"].includes(decision.prRating.overallTier) ||
-      ["missing", "mock_only", "insufficient"].includes(decision.realBehaviorProof.status)
-    );
-  }
-  const ratingSection = sectionValue(markdown, "PR Rating");
-  const proofSection = sectionValue(markdown, "Real Behavior Proof");
-  const overallTier = trustedPromotionValue(
-    markdown,
-    "pr_rating_overall",
-    sectionLineValue(ratingSection, "Overall tier"),
-    PR_RATING_TIER_VALUES,
-  );
-  const proofStatus = trustedPromotionValue(
-    markdown,
-    "real_behavior_proof_status",
-    sectionLineValue(proofSection, "Status"),
-    PROOF_STATUS_VALUES,
-  );
-  if (overallTier.invalid || proofStatus.invalid) return false;
+  const { decision } = requireReviewRecord(markdown);
   if (
-    ["S", "A", "B"].includes(overallTier.value) &&
-    ["sufficient", "override"].includes(proofStatus.value)
+    ["S", "A", "B"].includes(decision.prRating.overallTier) &&
+    ["sufficient", "override"].includes(decision.realBehaviorProof.status)
   ) {
     return false;
   }
   return (
-    ["D", "F"].includes(overallTier.value) ||
-    ["missing", "mock_only", "insufficient"].includes(proofStatus.value)
+    ["D", "F"].includes(decision.prRating.overallTier) ||
+    ["missing", "mock_only", "insufficient"].includes(decision.realBehaviorProof.status)
   );
 }
 
@@ -2308,7 +2226,8 @@ function commentSyncCandidates(
       if (reviewStatus !== "complete" && !failedReview) return [];
       if (!frontMatterValue(markdown, "item_snapshot_hash")) return [];
       const actionTaken = frontMatterValue(markdown, "action_taken");
-      const reviewed = reportReviewDecision(markdown);
+      const reviewed = readableReviewDecision(markdown);
+      if (!reviewed) return [];
       if (actionTaken === "skipped_invalid_decision") {
         const { decision, closeReason } = reviewed;
         if (
@@ -2588,11 +2507,6 @@ function itemNumberSet(value: string): ReadonlySet<number> | null {
 
 function checkpointNumber(name: string): number {
   return Number(name.match(/\d+/)?.[0] ?? 0);
-}
-
-function sectionLineValue(markdown: string, key: string): string {
-  const match = markdown.match(new RegExp(`^${escapeRegExp(key)}:\\s*(.+)$`, "m"));
-  return match?.[1]?.trim() ?? "";
 }
 
 function repoFor(markdown: string, name: string): string {

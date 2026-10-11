@@ -4,9 +4,15 @@ import { reportAllowsAutomation } from "../manual-publication-policy.js";
 import { asJsonObject, type JsonValue, type LooseRecord } from "./json-types.js";
 import { sha256 } from "../content-hash.js";
 import { parseFrontMatterStringArray, reportWithoutReviewRecord } from "../report-front-matter.js";
-import { readReviewRecordOrLegacy } from "../review-record.js";
-import { legacyReviewDecision } from "../review-record-backfill.js";
-import type { Decision } from "../clawsweeper-types.js";
+import {
+  readReviewRecord,
+  requireReviewRecord,
+  ReviewRecordFormatError,
+} from "../review-record.js";
+import {
+  legacyInputsForReportRevision,
+  type ReportRevisionInputs,
+} from "../report-revision-legacy-inputs.js";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -242,7 +248,23 @@ function prepare() {
     );
     return;
   }
-  const report = parseReviewReport(reportMarkdown);
+  const report = readableReviewReport(reportMarkdown);
+  if (!report) {
+    const out = {
+      status: "skipped_invalid_review_record",
+      should_repair: false,
+      reason: "review record is missing or invalid; a fresh review is required",
+      target_repo: targetRepo,
+      item_number: itemNumber,
+      report_path: reportPath,
+      report_url: reportUrl,
+      job_path: "",
+      existing_job_path: "",
+    };
+    writeStepOutputs(out);
+    console.log(JSON.stringify(out, null, 2));
+    return;
+  }
   const live = truthy(enabled)
     ? liveIssueContext({
         repo: targetRepo,
@@ -480,7 +502,7 @@ export function discoverImplementationCandidates({
     if (!fs.existsSync(sourceDir)) continue;
     for (const file of findMarkdownFiles(sourceDir)) {
       const sourceMarkdown = fs.readFileSync(file, "utf8");
-      const sourceReport = parseReviewReport(sourceMarkdown);
+      const sourceReport = parseIntakeMetadata(sourceMarkdown);
       const number = Number(sourceReport.frontmatter.number);
       const repository = sourceReport.frontmatter.repository || targetRepo;
       if (!Number.isSafeInteger(number) || number <= 0) continue;
@@ -489,9 +511,8 @@ export function discoverImplementationCandidates({
       const canonicalMarkdown = fs.existsSync(canonicalReportPath)
         ? fs.readFileSync(canonicalReportPath, "utf8")
         : null;
-      const canonicalFreshness = canonicalMarkdown
-        ? reviewFreshness(parseReviewReport(canonicalMarkdown))
-        : null;
+      const canonicalFreshness =
+        canonicalMarkdown === null ? null : reviewFreshness(parseIntakeMetadata(canonicalMarkdown));
       const sourceFreshness = reviewFreshness(sourceReport);
       // Publication hydrates records before reviewing, so its accepted artifact can
       // be newer than the runner's local snapshot of authoritative Worker state.
@@ -523,7 +544,8 @@ export function discoverImplementationCandidates({
   }
   const candidates: { candidate: LooseRecord; existingJob: boolean; retryDue: boolean }[] = [];
   for (const { markdown, number, reportPath, repository } of reviewsByIssue.values()) {
-    const parsedReport = parseReviewReport(markdown);
+    const parsedReport = readableReviewReport(markdown);
+    if (!parsedReport) continue;
     const decision = reportOnlyDecision({
       targetRepo,
       report: parsedReport,
@@ -647,7 +669,7 @@ function compareReviewFreshness(left: readonly number[], right: readonly number[
   return 0;
 }
 
-export function parseReviewReport(markdown: string): ReviewReport {
+function parseIntakeMetadata(markdown: string): ReviewReport {
   const match = markdown.match(/^---\n([\s\S]*?)\n---\n?/);
   const frontmatter: Record<string, string> = {};
   if (match) {
@@ -658,21 +680,23 @@ export function parseReviewReport(markdown: string): ReviewReport {
     }
   }
   const body = match ? markdown.slice(match[0].length) : markdown;
-  const { decision: recorded } = readReviewRecordOrLegacy(markdown, () => null);
-  if (!recorded) {
-    return {
-      frontmatter,
-      body,
-      workPrompt: section(body, "Repair Work Prompt"),
-      workReason: frontmatter.work_reason_sha256 ?? "",
-      securityStatus:
-        section(markdown, "Security Review")
-          .match(/^Status:\s*([a-z_]+)\s*$/im)?.[1]
-          ?.toLowerCase() ?? "",
-    };
+  return { frontmatter, body, workPrompt: "", workReason: "", securityStatus: "" };
+}
+
+function readableReviewReport(markdown: string): ReviewReport | null {
+  try {
+    return parseReviewReport(markdown);
+  } catch (error) {
+    if (!(error instanceof ReviewRecordFormatError)) throw error;
+    return null;
   }
+}
+
+export function parseReviewReport(markdown: string): ReviewReport {
+  const report = parseIntakeMetadata(markdown);
+  const { decision: recorded } = requireReviewRecord(markdown);
   // Keep host-owned metadata, but never let its repeated decision fields override the record.
-  Object.assign(frontmatter, {
+  Object.assign(report.frontmatter, {
     decision: recorded.decision,
     confidence: recorded.confidence,
     close_reason: recorded.closeReason,
@@ -692,13 +716,10 @@ export function parseReviewReport(markdown: string): ReviewReport {
     vision_fit: recorded.visionFit,
     vision_fit_evidence: JSON.stringify(recorded.visionFitEvidence),
   });
-  return {
-    frontmatter,
-    body,
-    workPrompt: recorded.workPrompt,
-    workReason: recorded.workReason,
-    securityStatus: recorded.securityReview.status,
-  };
+  report.workPrompt = recorded.workPrompt;
+  report.workReason = recorded.workReason;
+  report.securityStatus = recorded.securityReview.status;
+  return report;
 }
 
 export function reportOnlyDecision({
@@ -1113,9 +1134,9 @@ ${context.decision.blockers.length ? context.decision.blockers.map((blocker: str
 export function reportRevisionSha256(markdown: string) {
   const legacy = reportWithoutReviewRecord(markdown);
   const legacyRevision = sha256(legacy);
-  const { decision: recorded } = readReviewRecordOrLegacy(markdown, () => null);
+  const recorded = readReviewRecord(markdown)?.decision;
   if (!recorded) return legacyRevision;
-  const intakeInputs = (decision: Decision) => {
+  const intakeInputs = (decision: ReportRevisionInputs) => {
     const workPrompt = decision.workPrompt.trim();
     return JSON.stringify({
       decision: decision.decision,
@@ -1143,9 +1164,8 @@ export function reportRevisionSha256(markdown: string) {
   };
   const recordedInputs = intakeInputs(recorded);
   try {
-    // The backfill normalizes absent fields and placeholders. Compare against
-    // that same canonical baseline, not the historical text reader's defaults.
-    if (intakeInputs(legacyReviewDecision(legacy)) === recordedInputs) return legacyRevision;
+    if (intakeInputs(legacyInputsForReportRevision(legacy)) === recordedInputs)
+      return legacyRevision;
   } catch {
     // An unconvertible legacy report cannot establish equivalence with its record.
   }
@@ -1178,7 +1198,7 @@ function intakeAudit({ root, repo, number }: { root: string; repo: string; numbe
     `${number}.md`,
   );
   if (!fs.existsSync(auditPath)) return null;
-  return parseReviewReport(fs.readFileSync(auditPath, "utf8"));
+  return parseIntakeMetadata(fs.readFileSync(auditPath, "utf8"));
 }
 
 function intakeAuditAwaitsWorkerDispatch(audit: ReviewReport | null) {
@@ -1260,7 +1280,7 @@ export function markIssueImplementationDispatched({
   const resolvedAudit = path.resolve(resolvedRoot, auditPath);
   const resolvedJob = path.resolve(resolvedRoot, jobPath);
   const markdown = fs.readFileSync(resolvedAudit, "utf8");
-  const audit = parseReviewReport(markdown);
+  const audit = parseIntakeMetadata(markdown);
   const repository = audit.frontmatter.repo;
   const number = Number(audit.frontmatter.number);
   if (!repository || !Number.isSafeInteger(number) || number < 1) {
@@ -1567,14 +1587,27 @@ function inspectReferencedPullRequests({
 
 function readReport({ reportRepo, reportPath }: { reportRepo: string; reportPath: string }) {
   const local = args["report-file"] ?? args.report_file;
-  if (typeof local === "string") return fs.readFileSync(path.resolve(local), "utf8");
+  const localMarkdown =
+    typeof local === "string" ? fs.readFileSync(path.resolve(local), "utf8") : null;
   const canonicalPath = path.join(repoRoot(), reportPath);
   if (
     reportRepo.trim().toLowerCase() === "openclaw/clawsweeper-state" &&
     fs.existsSync(canonicalPath)
   ) {
-    return fs.readFileSync(canonicalPath, "utf8");
+    const canonicalMarkdown = fs.readFileSync(canonicalPath, "utf8");
+    // Recovered jobs must use the same freshness boundary as discovery, even
+    // when a caller supplies an older accepted artifact explicitly.
+    if (
+      localMarkdown === null ||
+      compareReviewFreshness(
+        reviewFreshness(parseIntakeMetadata(canonicalMarkdown)),
+        reviewFreshness(parseIntakeMetadata(localMarkdown)),
+      ) >= 0
+    ) {
+      return canonicalMarkdown;
+    }
   }
+  if (localMarkdown !== null) return localMarkdown;
   const content = ghJsonWithRetry<{ content?: string }>([
     "api",
     `repos/${reportRepo}/contents/${reportPath}`,
@@ -1594,13 +1627,6 @@ function findMarkdownFiles(dir: string): string[] {
     else if (entry.isFile() && entry.name.endsWith(".md")) out.push(full);
   }
   return out;
-}
-
-function section(markdown: string, heading: string) {
-  const match = markdown.match(
-    new RegExp(`(?:^|\\n)## ${escapeRegExp(heading)}\\n\\n([\\s\\S]*?)(?=\\n## |\\n?$)`, "i"),
-  );
-  return match?.[1]?.trim() ?? "";
 }
 
 function decision(status: string, shouldRepair: boolean, reason: string): IntakeDecision {
