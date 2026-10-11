@@ -546,7 +546,7 @@ function lifecycleRouterOrderingFixture({
     kind: terminalKind,
     observedAt: terminalObservedAt,
   });
-  const post = () =>
+  const post = (outcome: "durable" | "not_required" = "durable") =>
     queue.fetch(
       new Request("https://clawsweeper-exact-review-queue/lifecycle/router-receipt", {
         method: "POST",
@@ -554,7 +554,7 @@ function lifecycleRouterOrderingFixture({
           canonical_target_key: identity.canonicalTargetKey,
           fence_key: identity.fenceKey,
           revision: identity.revision,
-          outcome: "durable",
+          outcome,
           receipt_id: "router:706:1",
         }),
       }),
@@ -564,6 +564,17 @@ function lifecycleRouterOrderingFixture({
   const driverKey = `terminal-finalization:${identity.fenceKey}:${identity.revision}`;
   return { storage, post, projection, driverKey };
 }
+
+test("an incomplete durable router receipt cannot satisfy a not-required handoff", async () => {
+  const { storage, post, projection } = lifecycleRouterOrderingFixture({
+    terminalKind: "requeue",
+    receiptObservedAt: 3,
+    terminalObservedAt: 5,
+  });
+  const before = { projection: projection(), queue: storage.sql.readNormalizedQueue() };
+  assert.equal((await post("not_required")).status, 409);
+  assert.deepEqual({ projection: projection(), queue: storage.sql.readNormalizedQueue() }, before);
+});
 
 test("router receipt repair preserves matching later or equal terminal outcomes", async (t) => {
   for (const terminalKind of NON_ROUTED_TERMINAL_KINDS) {
@@ -650,11 +661,19 @@ for (const route of ["router-receipt", "terminal-disposition"] as const) {
     "rollback",
     "derived-replay",
     ...(route === "router-receipt"
-      ? ["rollback-requeue", "legacy", "legacy-terminal", "legacy-requeue", "legacy-requeue-tied"]
+      ? [
+          "not-required",
+          "rollback-requeue",
+          "legacy",
+          "legacy-terminal",
+          "legacy-requeue",
+          "legacy-requeue-tied",
+        ]
       : ["conflict"]),
   ]) {
     const legacy = scenario.startsWith("legacy");
     const requeue = scenario.includes("requeue");
+    const routerOutcome = scenario === "not-required" ? "not_required" : "durable";
     const description = legacy
       ? `${scenario} repairs only incomplete effects and marks completion`
       : scenario === "conflict"
@@ -683,7 +702,7 @@ for (const route of ["router-receipt", "terminal-disposition"] as const) {
         ...identity,
         deliveryId: "lifecycle-post-effect-replay",
         sourceAction: "legacy_dispatch",
-        commandOriginated: true,
+        commandOriginated: scenario !== "not-required",
         statusMarker:
           "<!-- clawsweeper-command-status:706:re_review:0123456789abcdef0123456789abcdef01234567 -->",
         statusCommentId: 7061,
@@ -703,7 +722,7 @@ for (const route of ["router-receipt", "terminal-disposition"] as const) {
       const payload = JSON.stringify({
         ...wireIdentity,
         ...(route === "router-receipt"
-          ? { outcome: "durable", receipt_id: "router-batch:706:1:fence" }
+          ? { outcome: routerOutcome, receipt_id: "router-batch:706:1:fence" }
           : { kind: "policy_noop", operation_id: "terminal-batch:706:1:fence" }),
       });
       const post = (target: string, body: string) =>
@@ -770,7 +789,10 @@ for (const route of ["router-receipt", "terminal-disposition"] as const) {
           (await post(route, payload)).status,
           scenario === "derived-replay" ? 409 : 200,
         );
-        assert.ok(storage.sql.readNormalizedQueue().items[driverKey]);
+        assert.equal(
+          Boolean(storage.sql.readNormalizedQueue().items[driverKey]),
+          scenario !== "not-required",
+        );
       }
       if (requeue && scenario !== "rollback-requeue") {
         if (scenario !== "legacy-requeue-tied") t.mock.timers.tick(1_000);
@@ -793,6 +815,10 @@ for (const route of ["router-receipt", "terminal-disposition"] as const) {
       const replay = await post(route, payload);
       assert.equal(replay.status, 200);
       assert.equal((await replay.json()).ok, true);
+      if (scenario === "not-required") {
+        assert.equal(lifecycleState(projection()), "completed");
+        assert.equal(projection().routerReceipt?.outcome, "not_required");
+      }
       if (scenario === "rollback-requeue") {
         assert.equal(projection().routerReceipts.length, 1);
         assert.equal(projection().routerReceipts[0].operationComplete, true);
@@ -845,11 +871,18 @@ for (const route of ["router-receipt", "terminal-disposition"] as const) {
         );
       }
       if (route === "router-receipt") {
-        const conflicting = await post(
+        const handoff = await post(
           route,
-          JSON.stringify({ ...JSON.parse(payload), outcome: "not_required" }),
+          JSON.stringify({
+            ...JSON.parse(payload),
+            outcome: routerOutcome === "durable" ? "not_required" : "durable",
+          }),
         );
-        assert.equal(conflicting.status, 409);
+        assert.equal(
+          handoff.status,
+          routerOutcome === "durable" ? 200 : 409,
+          "a completed durable receipt covers not_required, never the reverse",
+        );
         assert.deepEqual(
           { projection: projection(), queue: storage.sql.readNormalizedQueue() },
           before,
