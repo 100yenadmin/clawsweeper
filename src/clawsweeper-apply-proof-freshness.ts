@@ -40,6 +40,12 @@ type ApplyProofFreshnessDependencies = Pick<
   automationItemUpdatedAt: string | undefined;
   completeReviewActivityReceiptMatches: (context: ItemContext) => boolean;
   currentProofState: () => {
+    /**
+     * Live `updated_at` that the pre-apply source-freshness gate already accepted as the
+     * reviewed source (unchanged, or moved only by receipt-backed ClawSweeper writes). Absent
+     * when that gate did not accept it.
+     */
+    acceptedUpdatedAt: string | undefined;
     cachedPrCloseCoverageProofGateResult: PrCloseCoverageProofGateResult | undefined;
     prCloseCoverageProofGateChecked: boolean;
     prCloseCoverageProofStartedAtMs: number | null;
@@ -84,6 +90,7 @@ export function createApplyProofFreshnessGuards({
     currentSnapshotHash?: string;
   } | null => {
     const {
+      acceptedUpdatedAt,
       cachedPrCloseCoverageProofGateResult,
       prCloseCoverageProofGateChecked,
       prCloseCoverageProofStartedAtMs,
@@ -135,10 +142,19 @@ export function createApplyProofFreshnessGuards({
     const refreshedActivityReceipt = refreshedCompleteActivityContext
       ? stableJson(refreshedCompleteActivityContext)
       : null;
+    // The pre-apply gate already accepted this updated_at as ClawSweeper's own receipt-backed
+    // write (such as the automatic review progress edit). A same-second human edit can share
+    // that timestamp, so the accepted baseline still needs the review's complete structural
+    // receipt (source, timeline, head, review activity) to match the live item below.
+    const atAcceptedBaseline =
+      acceptedUpdatedAt !== undefined &&
+      acceptedUpdatedAt !== storedUpdatedAt &&
+      refreshed.item.updatedAt === acceptedUpdatedAt;
     const refreshedReviewActivityCursor =
       itemKind === "pull_request" &&
       (candidateItemReceipts.length > 0 ||
         mayMatchPersistedAutomationReceipt ||
+        atAcceptedBaseline ||
         refreshed.item.updatedAt === storedUpdatedAt)
         ? fetchReviewedPrActivityCursor(number)
         : null;
@@ -210,9 +226,16 @@ export function createApplyProofFreshnessGuards({
       mayMatchPersistedAutomationReceipt &&
       reviewHasCompleteActivityIdentity &&
       refreshedCompleteReceiptMatchesReview();
+    // Same structural standard as a persisted automation receipt: the timestamp alone never
+    // proves ownership.
+    const acceptedBaselineReceiptMatches =
+      atAcceptedBaseline &&
+      reviewHasCompleteActivityIdentity &&
+      refreshedCompleteReceiptMatchesReview();
     const refreshedSelfMutationOnlyUpdate =
       refreshedItemReceiptMatches ||
       persistedAutomationReceiptMatches ||
+      acceptedBaselineReceiptMatches ||
       refreshedCommandStatusOnlyUpdate;
     const selfMutationMaskedNonAutomationActivity = (): boolean => {
       const postReviewSelfMutationAtMs = candidateItemReceipts
@@ -255,6 +278,8 @@ export function createApplyProofFreshnessGuards({
           candidate_receipts: candidateItemReceipts.length,
           receipt_matches: refreshedItemReceiptMatches,
           persisted_receipt_matches: persistedAutomationReceiptMatches,
+          accepted_baseline: atAcceptedBaseline,
+          accepted_baseline_receipt_matches: acceptedBaselineReceiptMatches,
           command_status_only: refreshedCommandStatusOnlyUpdate,
         })}`,
       );
