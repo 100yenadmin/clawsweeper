@@ -578,6 +578,10 @@ function authorIssueCountInBulkFilerWindow(
     "type:issue",
     `author:${quoteGitHubSearchTerm(author)}`,
     `created:${rangeStart}..${windowEnd}`,
+    // An issue closed as completed was a real report and no longer counts. Model ratings
+    // stay counted until they are stable for unchanged issues
+    // (https://github.com/openclaw/clawsweeper/issues/1752).
+    "-reason:completed",
   ].join(" ");
   const result = ghJsonOnce<{ total_count?: number; incomplete_results?: boolean }>(
     ["api", "search/issues", "--method", "GET", "-f", `q=${query}`, "-f", "per_page=1"],
