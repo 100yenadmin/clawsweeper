@@ -33,6 +33,7 @@ still exclude workflow, item, and step titles, raw or source URLs, queries, raw
 failure keys and payloads, internal opaque keys, credentials, tokens, private
 or non-allowlisted repositories, and per-job diagnostic text.
 
+
 Queue transport failures keep the fixed public `exact_review_queue_unavailable`
 response. Server logs for `exact_review_queue_request_failed` retain only the
 Cloudflare `remote`, `retryable`, and `overloaded` boolean flags; exception text,
@@ -159,6 +160,7 @@ the shared webhook signing secret is configured. Snapshot and job-cache TTLs,
 pagination, freshness, genuine GitHub errors, and the public Bay contract are
 unchanged.
 
+
 ## What It Shows
 
 - bounded active-work counts and closed workflow, worker, status, stage, and
@@ -172,8 +174,8 @@ unchanged.
   validated queue-start or public action-start clock with its closed kind
 - durable lifecycle inventory and six closed lane counts plus at most 24
   minimal cards for verified-public repository/item references
-- a budget-sized capacity rail plus aggregate counts for issue-to-PR, PR repair,
-  review, repair, commit, assist, and other worker classes
+- a budget-sized capacity rail plus aggregate counts for review, commit, assist,
+  and other worker classes
 - queued and waiting run counts
 - operational health derived from queue age and running age: queued runs from
   30 through 1440 minutes old degrade operational health; queued runs older
@@ -184,14 +186,9 @@ unchanged.
   depth, and the oldest queued/running ages
 - aggregate worker-attempt error, recovery, and unresolved-failure counts,
   including failures hidden by workflow `continue-on-error`
-- automerge worker reliability from the dedicated repair workflow, including
-  sampled failure rate, average and longest runtime, active or stalled attempts,
-  and bounded unresolved or recovered outcome counts
-- active pipeline rows grouped as automerge, repair, exact review, hot review,
-  apply, or background review
+- active pipeline rows grouped as exact review, hot review, apply, or background
+  review
 - CI state for active PR rows when available
-- global automerge command-to-merge timing buckets and closed terminal outcomes;
-  repository, policy, and session rows are not public
 - explicit workflow status events posted to the ingest API when KV ingest is
   enabled
 - global apply-lane queue, result, lease, and closed failure-category counts;
@@ -257,9 +254,6 @@ every cache/store read. Legacy cache bodies are reprojected, nested or unexpecte
 fields are dropped, and stale, future-dated, or malformed store documents are
 rejected. Diagnostics retain a bounded error count and the fixed
 `telemetry_unavailable` category, never upstream exception or API error text.
-Recent automerge timing and completed-run samples may still be collected
-privately for five minutes, but only their closed aggregate projections enter
-the public response.
 
 ## Public projection contract
 
@@ -281,10 +275,6 @@ queue and auxiliary work retain ownership of alarm scheduling.
 - `/api/apply-observability` returns global queue, result, retry, lease, and
   closed failure-category counts for a normalized range. It omits repository
   inventories, run links, and failure messages.
-- `/api/automerge-metrics` returns global summaries, time buckets, closed
-  terminal-outcome counts, and repair-efficiency counts. It omits repository
-  and policy filters and every session row; unrecognized terminal outcomes are
-  combined into `unknown`.
 - `/api/exact-review-queue/item` does not perform a public per-item lookup, and
   `/api/exact-review-queue/reviews` returns a stable empty aggregate envelope.
 
