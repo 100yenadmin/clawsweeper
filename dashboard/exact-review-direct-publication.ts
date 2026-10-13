@@ -25,6 +25,9 @@ export const REVIEW_COVERAGE_INVENTORY_KEY = "review-coverage-inventory:v1";
 export const REVIEW_COVERAGE_INVENTORY_STALE_MS = 12 * 60 * 60 * 1000;
 // Front matter always leads a canonical record; 4 KiB comfortably bounds it.
 export const REVIEW_COVERAGE_HEAD_BYTES = 4096;
+// About 20-40 ms of CPU per page on the production store.
+export const REVIEW_COVERAGE_SCAN_PAGE_ROWS = 2_000;
+export const REVIEW_COVERAGE_SCAN_MAX_AGE_MS = 15 * 60 * 1000;
 
 const DIRECT_PUBLICATION_TERMINAL_PRUNE_LIMIT = 256;
 const MAX_PATH_BYTES = 1024;
@@ -648,17 +651,28 @@ export class ExactReviewDirectPublicationStore {
     );
   }
 
-  reviewCoverageSync(
+  // Folds one page of canonical `items` records into `fleets` and returns the
+  // cursor for the next page, or null after the last page. A full scan reads
+  // every record head and takes seconds of CPU; the caller yields between pages
+  // so queue claims, heartbeats and alarms are not held behind it.
+  reviewCoverageScanPageSync(
+    fleets: Map<string, ReviewCoverageFleetCounts>,
+    after: ReviewCoverageScanCursor | null,
+    limit: number,
     now: number,
     windowMs = REVIEW_COVERAGE_WINDOW_MS,
-    inventory: ReviewCoverageInventorySnapshot | null = null,
-  ): ReviewCoverageSummary {
+  ): ReviewCoverageScanCursor | null {
+    const cursor = after ?? this.nextReviewCoverageRepositorySync("");
+    if (!cursor) return null;
     // Canonical `items` records cover items that have reached publication; they
     // are not a complete GitHub-open inventory. Only the front matter is needed,
     // so read a bounded head and combine it with the periodically published live
     // fleet counts instead of treating missing records as nonexistent work.
+    // Each page stays inside one repository: equality on (repo_slug, section)
+    // and a range on item_id read the listing index in order. A cursor that
+    // spans repositories makes SQLite sort every remaining row for each page.
     const rows = this.storage.sql.exec(
-      `SELECT r.repo_slug AS repo_slug,
+      `SELECT r.item_id AS item_id,
               CASE
                 WHEN r.content IS NOT NULL THEN substr(r.content, 1, ${REVIEW_COVERAGE_HEAD_BYTES})
                 ELSE (SELECT substr(c.content_base64, 1, ${REVIEW_COVERAGE_HEAD_BYTES * 2})
@@ -670,13 +684,21 @@ export class ExactReviewDirectPublicationStore {
               END AS head,
               (r.content IS NULL) AS chunked
          FROM ${EXACT_REVIEW_CANONICAL_RECORD_TABLE} r
-        WHERE r.section = 'items' AND r.deleted = 0`,
+        WHERE r.repo_slug = ? AND r.section = 'items' AND r.item_id > ? AND r.deleted = 0
+        ORDER BY r.item_id
+        LIMIT ?`,
+      cursor.repoSlug,
+      cursor.itemId,
+      limit,
     );
-    const fleets = new Map<string, MutableReviewCoverageFleet>();
+    const repoSlug = cursor.repoSlug;
+    let lastItemId = cursor.itemId;
+    let read = 0;
     for (const row of rows) {
+      read += 1;
+      lastItemId = Number(row.item_id);
       const head = reviewCoverageHeadText(row.head, Number(row.chunked) === 1);
       const fields = reviewCoverageFrontMatter(head);
-      const repoSlug = String(row.repo_slug);
       const repo = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(fields.repository ?? "")
         ? fields.repository!
         : /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(fields.repo ?? "")
@@ -716,6 +738,30 @@ export class ExactReviewDirectPublicationStore {
       }
       fleets.set(repoSlug, fleet);
     }
+    if (read === limit) return { repoSlug, itemId: lastItemId };
+    return this.nextReviewCoverageRepositorySync(repoSlug);
+  }
+
+  private nextReviewCoverageRepositorySync(after: string): ReviewCoverageScanCursor | null {
+    const [row] = Array.from(
+      this.storage.sql.exec(
+        `SELECT MIN(repo_slug) AS repo_slug FROM ${EXACT_REVIEW_CANONICAL_RECORD_TABLE}
+          WHERE repo_slug > ?`,
+        after,
+      ),
+    );
+    return typeof row?.repo_slug === "string" ? { repoSlug: row.repo_slug, itemId: 0 } : null;
+  }
+
+  // Combines finished scan counts with the live inventory. This is cheap (one
+  // entry per repository), so inventory updates apply without a new scan.
+  reviewCoverageSummary(
+    scanned: ReadonlyMap<string, ReviewCoverageFleetCounts>,
+    now: number,
+    inventory: ReviewCoverageInventorySnapshot | null,
+    windowMs = REVIEW_COVERAGE_WINDOW_MS,
+  ): ReviewCoverageSummary {
+    const fleets = new Map(scanned);
     const inventoryBySlug = new Map(
       (inventory?.repositories ?? []).map((entry) => [entry.repo_slug, entry] as const),
     );
@@ -2162,7 +2208,14 @@ function canonicalPath(value: unknown) {
   return path;
 }
 
-type MutableReviewCoverageFleet = {
+export type ReviewCoverageScanCursor = { repoSlug: string; itemId: number };
+
+export type ReviewCoverageScan = {
+  scannedAt: number;
+  fleets: ReadonlyMap<string, ReviewCoverageFleetCounts>;
+};
+
+export type ReviewCoverageFleetCounts = {
   repo: string;
   repo_slug: string;
   tracked_records: number;
@@ -2187,7 +2240,7 @@ export type ReviewCoverageInventorySnapshot = {
   repositories: ReviewCoverageInventoryRepository[];
 };
 
-export type ReviewCoverageFleet = MutableReviewCoverageFleet & {
+export type ReviewCoverageFleet = ReviewCoverageFleetCounts & {
   open_records: number;
   reviewable_records: number;
   untracked_open: number;
@@ -2267,7 +2320,7 @@ export function normalizeReviewCoverageInventory(
 }
 
 function projectReviewCoverageFleet(
-  fleet: MutableReviewCoverageFleet,
+  fleet: ReviewCoverageFleetCounts,
   inventory: ReviewCoverageInventoryRepository | null,
   hasInventory: boolean,
 ): ReviewCoverageFleet {
