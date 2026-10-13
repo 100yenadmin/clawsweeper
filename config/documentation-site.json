@@ -45,6 +45,11 @@
   ],
   "noncanonical": [
     {
+      "path": "portable-review-receipt.md",
+      "lifecycle": "proposed",
+      "banner": "This candidate exports a local advisory summary; general attachment and hosted enforcement are not enabled."
+    },
+    {
       "path": "queue-service-split-runbook.md",
       "lifecycle": "proposed",
       "banner": "This is an unapproved proposal, not current operator guidance."
